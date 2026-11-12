@@ -8,6 +8,8 @@ import { currentToken } from "./lib/auth";
 import { ApiError, type QueuedJob } from "./lib/api";
 import { describeError, followQueued, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
 import { load, remove, save } from "./lib/storage";
+import { takeSharedPhotos } from "./lib/shared";
+import { useInstall } from "./lib/install";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
 import type { Extraction } from "./lib/schema";
 
@@ -52,6 +54,18 @@ export default function App() {
   const [session, setSession] = useState<ReviewSession | null>(null);
   const [saved] = useState(() => load<ReviewSession>(SESSION_STORAGE));
   const abort = useRef<AbortController | null>(null);
+  const [incoming, setIncoming] = useState<File[] | undefined>(undefined);
+  const { canInstall, install, iosTip } = useInstall();
+
+  // Photos shared from the phone's gallery (Android share sheet).
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("shared")) return;
+    window.history.replaceState(null, "", url.pathname);
+    void takeSharedPhotos()
+      .then((files) => files.length && setIncoming(files))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     try {
@@ -152,11 +166,18 @@ export default function App() {
             <small>Scoresheet photos to PGN files</small>
           </span>
         </a>
-        {signInAvailable && (
-          <button type="button" className="secondary small" onClick={() => setSignInOpen((o) => !o)} aria-expanded={signInOpen}>
-            {user ? (user.email ?? "Account") : "Sign in"}
-          </button>
-        )}
+        <span className="row">
+          {canInstall && (
+            <button type="button" className="secondary small" onClick={install}>
+              Install app
+            </button>
+          )}
+          {signInAvailable && (
+            <button type="button" className="secondary small" onClick={() => setSignInOpen((o) => !o)} aria-expanded={signInOpen}>
+              {user ? (user.email ?? "Account") : "Sign in"}
+            </button>
+          )}
+        </span>
       </header>
       <SignInPanel open={signInOpen} onClose={() => setSignInOpen(false)} />
 
@@ -167,6 +188,11 @@ export default function App() {
               Take a photo of a handwritten tournament scoresheet. Claude reads the moves, a chess engine checks each one
               is legal, you fix anything doubtful, and you download a PGN file.
             </p>
+            {iosTip && (
+              <p className="install-tip">
+                Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like an app.
+              </p>
+            )}
             {saved && !session && (
               <p className="resume">
                 <button
@@ -198,6 +224,7 @@ export default function App() {
               error={error}
               onConvert={convert}
               onDemo={demo}
+              incoming={incoming}
             />
           </>
         )}

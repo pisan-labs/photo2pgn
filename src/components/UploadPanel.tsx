@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { prepareImage, type PreparedImage } from "../lib/image";
+import { PhotoEditor } from "./PhotoEditor";
 import type { FreeReader } from "../lib/reading";
 
 export type Mode = "free" | "own-key";
@@ -21,6 +22,8 @@ interface Props {
   error: string | null;
   onConvert: () => void;
   onDemo: () => void;
+  /** Photos handed over by the share sheet, to add once. */
+  incoming?: File[];
 }
 
 export function UploadPanel(p: Props) {
@@ -29,6 +32,8 @@ export function UploadPanel(p: Props) {
   const [loading, setLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const took = useRef(false);
 
   async function addFiles(files: FileList | File[] | null) {
     if (!files) return;
@@ -42,12 +47,22 @@ export function UploadPanel(p: Props) {
       for (const f of list.slice(0, room)) prepared.push(await prepareImage(f));
       p.setPages([...p.pages, ...prepared]);
       if (list.length > room) setFileError(`Only ${p.maxPages} pages per game; the rest were left out.`);
+      // A sideways or cluttered first photo is the usual case on a phone.
+      if (p.pages.length === 0 && prepared.length === 1 && prepared[0].width > prepared[0].height) setEditing(0);
     } catch (err) {
       setFileError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (p.incoming?.length && !took.current) {
+      took.current = true;
+      void addFiles(p.incoming);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.incoming]);
 
   const keyValid = /^sk-ant-\S{10,}$/.test(p.apiKey.trim());
   const freeReady = p.signInAvailable && p.signedIn;
@@ -79,14 +94,19 @@ export function UploadPanel(p: Props) {
               <li key={pg.previewUrl}>
                 <img src={pg.previewUrl} alt={`Page ${i + 1}`} />
                 <span>Page {i + 1}</span>
-                <button
-                  type="button"
-                  className="link"
-                  onClick={() => p.setPages(p.pages.filter((_, j) => j !== i))}
-                  aria-label={`Remove page ${i + 1}`}
-                >
-                  Remove
-                </button>
+                <span className="row page-actions">
+                  <button type="button" className="secondary small" onClick={() => setEditing(i)} aria-label={`Turn or crop page ${i + 1}`}>
+                    Turn / crop
+                  </button>
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => p.setPages(p.pages.filter((_, j) => j !== i))}
+                    aria-label={`Remove page ${i + 1}`}
+                  >
+                    Remove
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -98,15 +118,15 @@ export function UploadPanel(p: Props) {
                 ? "Flat, in good light, the whole move table in the frame."
                 : "Game continues on another page? Add it."}
             </p>
-            <div className="row">
-              <button type="button" onClick={() => cameraRef.current?.click()} disabled={loading}>
-                Take photo
+            <div className="row capture">
+              <button type="button" className="camera" onClick={() => cameraRef.current?.click()} disabled={loading}>
+                <span aria-hidden="true">📷</span> Take photo
               </button>
               <button type="button" className="secondary" onClick={() => fileRef.current?.click()} disabled={loading}>
-                Choose file
+                Choose a photo
               </button>
             </div>
-            <p className="hint">or drop an image here</p>
+            <p className="hint desktop-only">or drop an image here</p>
           </div>
         )}
         {loading && <p className="hint">Preparing photo…</p>}
@@ -134,6 +154,16 @@ export function UploadPanel(p: Props) {
         />
       </div>
       {fileError && <p className="error">{fileError}</p>}
+      {editing !== null && p.pages[editing] && (
+        <PhotoEditor
+          page={p.pages[editing]}
+          onCancel={() => setEditing(null)}
+          onDone={(edited) => {
+            p.setPages(p.pages.map((pg, j) => (j === editing ? edited : pg)));
+            setEditing(null);
+          }}
+        />
+      )}
 
       <h2>2. Choose how it is read</h2>
       <div className="choices" role="radiogroup" aria-label="How it is read">
@@ -194,7 +224,7 @@ export function UploadPanel(p: Props) {
           {p.error}
         </p>
       )}
-      <div className="row actions">
+      <div className="row actions sticky-actions">
         <button type="button" className="primary" disabled={!canConvert} onClick={p.onConvert}>
           Read scoresheet
         </button>

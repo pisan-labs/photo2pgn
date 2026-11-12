@@ -781,3 +781,119 @@ table.moves {
 .choice .small {
   margin-top: 8px;
 }
+
+/* Photo editor */
+
+.editor {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(10, 12, 16, 0.85);
+  display: grid;
+  place-items: center;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+
+.editor-body {
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 12px;
+  width: min(100%, 720px);
+  max-height: 100%;
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+}
+
+.editor-frame {
+  position: relative;
+  justify-self: center;
+  touch-action: none;
+  user-select: none;
+  line-height: 0;
+}
+
+.editor-frame img {
+  display: block;
+  max-width: 100%;
+  max-height: 62vh;
+}
+
+.crop {
+  position: absolute;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  cursor: move;
+}
+
+.handle {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--accent);
+}
+
+.handle.nw { left: -14px; top: -14px; cursor: nwse-resize; }
+.handle.ne { right: -14px; top: -14px; cursor: nesw-resize; }
+.handle.sw { left: -14px; bottom: -14px; cursor: nesw-resize; }
+.handle.se { right: -14px; bottom: -14px; cursor: nwse-resize; }
+
+.editor-actions .spacer {
+  flex: 1;
+}
+
+/* Phone-first capture */
+
+.capture .camera {
+  font-size: 1.1rem;
+  padding: 12px 22px;
+  min-height: 52px;
+}
+
+.page-actions {
+  justify-content: center;
+}
+
+@media (max-width: 720px) {
+  .capture {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .capture .camera {
+    font-size: 1.2rem;
+    min-height: 64px;
+  }
+  .desktop-only {
+    display: none;
+  }
+  .dropzone {
+    padding: 12px;
+  }
+  .sticky-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    background: var(--panel);
+    margin: 16px -16px -16px;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+  }
+  .sticky-actions .primary {
+    flex: 1;
+    min-height: 52px;
+  }
+}
+
+@media (pointer: coarse) {
+  button {
+    min-height: 44px;
+  }
+}
+
+.install-tip {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
