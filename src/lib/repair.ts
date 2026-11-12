@@ -1,22 +1,42 @@
-// Replays the moves read from a scoresheet and repairs misreadings.
+// Replays the moves read from a scoresheet and repairs misreadings, including
+// sheets in very poor handwriting.
 //
-// Claude reads the handwriting; this module decides what is legal. Each ply
-// can be the primary reading, one of Claude's alternatives, the raw written
-// text in the sheet's own notation, a legal move about one misread character
-// away, or (for a blank or unreadable cell) any legal move. Each choice has a
-// cost; a small beam search keeps the cheapest paths and gives up on a ply
-// when continuing would cost more than leaving the rest for the person.
-// Anything other than the primary reading is flagged for review; nothing is
-// changed silently.
+// Claude reads the handwriting; this module decides what is legal. For each
+// ply the candidates are, from cheapest to dearest:
+//   - the primary reading (exact match against the legal moves),
+//   - one of Claude's alternative readings, or the text as written in the
+//     sheet's own notation,
+//   - a near miss: a legal move about one or two misread characters away,
+//     including partial readings with _ for unreadable characters,
+//   - a guess: any legal move, priced by how far it is from what was read.
+// A beam search keeps the cheapest paths. When even the best path needs an
+// expensive fix, the search backtracks: it tries changing earlier moves that
+// could explain the failure (the same side's moves with that piece, and the
+// last few plies), even clearly read legal ones, since a confident misreading
+// often only breaks a move several plies later. Guesses among equally
+// distant moves prefer natural ones (recaptures, captures, checks). Stopping
+// is priced per unplayed ply, so a guess that makes the rest of the game
+// legal wins; fixes that come in clusters cost extra, so a chain of fixes
+// through garbage loses to stopping and asking the person. Every choice
+// other than the primary reading is flagged for review.
 import { Chess } from "chess.js";
 import type { MoveRow, PlyReading } from "./schema";
-import { cleanMoveText, markerCost, moveVariants, parseMove, readingDistance, type ParsedMove } from "./notation";
+import {
+  cleanMoveText,
+  markerCost,
+  moveVariants,
+  parseMove,
+  patternDistance,
+  readingDistance,
+  type ParsedMove,
+} from "./notation";
 
 export type PlyStatus = "ok" | "unsure" | "fixed" | "illegal" | "unchecked";
-export type ChoiceSource = "edit" | "reading" | "alternative" | "written" | "near-miss" | "guess";
+export type ChoiceSource = "edit" | "reading" | "alternative" | "written" | "near-miss" | "guess" | "backtrack";
 
 export interface PlyInput {
-  moveNumber: number;
+  moveNumber: number; // in the game (1. e4 e5 2. ...), whatever the sheet says
+  sheetNumber: number; // the row number written on the sheet
   color: "w" | "b";
   reading: PlyReading | null; // null: the cell was empty
 }
@@ -29,40 +49,64 @@ export interface PlyResult extends PlyInput {
   note: string;
   fenBefore: string | null;
   fenAfter: string | null;
-  suggestions: string[]; // legal moves worth offering in a picker
+  suggestions: string[]; // legal moves worth offering in a picker, best first
+  support: number; // for a fixed move: how many following moves fit as read
 }
 
 export interface Analysis {
   plies: PlyResult[];
-  legalCount: number; // plies before the first one that could not be made legal
+  legalCount: number; // plies before the first one left unplayed
   stoppedAt: number | null; // index of that ply
   finalFen: string;
   endState: "checkmate" | "stalemate" | null;
 }
 
-// Costs. A full character misread is about 1.
+type Legibility = PlyReading["legibility"];
+
+// Costs. A full misread character is about 1.
 const COST = {
   readingUnclear: 0.1,
+  ambiguous: 0.3, // the reading fits two legal moves (Nd7 with knights on b8 and f6)
   written: 0.3,
   alternative: 0.4, // + 0.1 per rank in Claude's list
-  nearMiss: { clear: 1.5, unclear: 1.0, illegible: 0.5 },
-  guess: 2.5,
-  // Choosing anything but a legal, clearly written move.
-  overrideClear: 2,
-  // Giving up at a ply and leaving it for the person: about one fix too many.
-  stop: 4,
+  // A clear reading that needs fixing is rarer than an unclear one.
+  nearMiss: { clear: 2.5, unclear: 1.0, illegible: 0.5 } as Record<Legibility, number>,
+  nearMissLimit: { clear: 1.2, unclear: 2.0, illegible: 3.0 } as Record<Legibility, number>,
+  guess: { clear: 5.0, unclear: 3.0, illegible: 2.5 } as Record<Legibility, number>,
+  guessPerDistance: 0.5,
+  guessDistanceCap: 4,
+  // Changing a legal, clearly read move (only while backtracking).
+  override: 2,
+  // A fix within CLUSTER_PLIES of the previous fix: garbage, not handwriting.
+  cluster: 2,
+  // Each ply left unplayed when the search gives up.
+  stopPerPly: 1,
 };
-const NEAR_MISS_LIMIT = 1.2;
+const CLUSTER_PLIES = 2;
+const MAX_BACKTRACKS = 12;
+const RECENT_PLIES = 4; // always reconsidered when backtracking
+// A backtracked path is kept in the beam this many plies even if it looks
+// dearer: the path it competes with has not paid for its later fixes yet.
+const PROTECT_PLIES = 10;
+const PROTECTED_SLOTS = 8;
+const EXACT = 0.15; // a missing x is still an exact reading
+const TROUBLE = 2; // a step this expensive makes the search backtrack
+const WINDOW = 20; // how far back backtracking looks
 const BEAM_WIDTH = 48;
-const BEAM_WIDTH_AFTER_GUESS = 600;
+const BEAM_WIDTH_BLANK = 200; // after a blank cell many moves nearly tie
+const GUESSES_FOR_LEGAL = 10; // guesses tried for a legal but doubtful reading
 
 /** Flatten scoresheet rows into plies, dropping trailing empty cells. */
 export function rowsToPlies(rows: MoveRow[]): PlyInput[] {
   const sorted = [...rows].sort((a, b) => a.number - b.number);
   const plies: PlyInput[] = [];
   for (const row of sorted) {
-    plies.push({ moveNumber: row.number, color: "w", reading: row.white });
-    plies.push({ moveNumber: row.number, color: "b", reading: row.black });
+    for (const [color, reading] of [
+      ["w", row.white],
+      ["b", row.black],
+    ] as const) {
+      plies.push({ moveNumber: Math.floor(plies.length / 2) + 1, sheetNumber: row.number, color, reading });
+    }
   }
   while (plies.length && isBlank(plies[plies.length - 1].reading)) plies.pop();
   return plies;
@@ -72,189 +116,439 @@ function isBlank(r: PlyReading | null): boolean {
   return !r || (!r.san.trim() && !r.written.trim());
 }
 
+// ---- readings, prepared once per ply ----
+
+interface ReadingInfo {
+  legibility: Legibility;
+  blank: boolean;
+  primary: ParsedMove[];
+  alternatives: ParsedMove[][];
+  written: ParsedMove[];
+  all: ParsedMove[]; // every parsed variant, for distances
+  patterns: string[]; // partial or unparseable readings, for patternDistance
+  marks: string; // where check and mate signs are read from
+  text: string; // for notes
+}
+
+function parseAll(text: string, lang: string): { parsed: ParsedMove[]; patterns: string[] } {
+  const parsed: ParsedMove[] = [];
+  const patterns: string[] = [];
+  for (const v of moveVariants(text, lang)) {
+    const p = parseMove(v);
+    if (p) parsed.push(p);
+    else if (/[a-h1-8_]/.test(v)) patterns.push(v);
+  }
+  return { parsed, patterns };
+}
+
+function prepare(r: PlyReading | null, lang: string): ReadingInfo {
+  if (!r) {
+    return { legibility: "illegible", blank: true, primary: [], alternatives: [], written: [], all: [], patterns: [], marks: "", text: "" };
+  }
+  const primary = parseAll(r.san, "en");
+  const alternatives = r.alternatives.slice(0, 5).map((a) => parseAll(a, "en"));
+  const written = parseAll(r.written, lang);
+  const legibility: Legibility = r.san.trim() ? r.legibility : "illegible";
+  return {
+    legibility,
+    blank: isBlank(r) || (legibility === "illegible" && !primary.parsed.length && !written.patterns.length && !written.parsed.length),
+    primary: primary.parsed,
+    alternatives: alternatives.map((a) => a.parsed),
+    written: written.parsed,
+    all: [...primary.parsed, ...alternatives.flatMap((a) => a.parsed), ...written.parsed],
+    patterns: [...new Set([...primary.patterns, ...alternatives.flatMap((a) => a.patterns), ...written.patterns])],
+    marks: r.written || r.san,
+    text: r.san || r.written,
+  };
+}
+
+// ---- positions, cached by FEN ----
+
+interface Position {
+  sans: string[];
+  parsed: (ParsedMove | null)[];
+}
+
+class Positions {
+  private cache = new Map<string, Position>();
+  get(fen: string): Position {
+    let p = this.cache.get(fen);
+    if (!p) {
+      const sans = new Chess(fen).moves();
+      p = { sans, parsed: sans.map((s) => parseMove(cleanMoveText(s))) };
+      this.cache.set(fen, p);
+    }
+    return p;
+  }
+}
+
+/** Legal moves that a reading names exactly. */
+function exact(pos: Position, readings: ParsedMove[]): number[] {
+  const out: number[] = [];
+  pos.parsed.forEach((m, i) => {
+    if (m && readings.some((r) => readingDistance(r, m) <= EXACT)) out.push(i);
+  });
+  return out;
+}
+
+function distanceTo(info: ReadingInfo, m: ParsedMove | null, san: string): number {
+  let d = Infinity;
+  if (m) for (const r of info.all) d = Math.min(d, readingDistance(r, m));
+  for (const p of info.patterns) d = Math.min(d, patternDistance(p, san));
+  return d;
+}
+
+// ---- candidates for one ply in one position ----
+
 interface Candidate {
   san: string;
   cost: number;
   source: ChoiceSource;
 }
 
-interface BeamState {
-  fen: string;
-  cost: number;
-  choices: Candidate[];
+/**
+ * A small preference among guesses for natural moves, so that ties between
+ * equally distant guesses (above all for blank cells) break sensibly.
+ */
+function prior(m: ParsedMove | null, san: string, lastTo: string | null, moveNumber: number): number {
+  let p = 0;
+  if (san.endsWith("#")) p -= 1;
+  else if (san.endsWith("+")) p -= 0.2;
+  if (!m) return p;
+  if (m.castle) return p - 0.3;
+  if (m.capture) p -= m.to === lastTo ? 0.8 : 0.3; // recaptures most of all
+  if (m.piece === "K") p += 0.5;
+  if (m.piece === "Q" && moveNumber <= 8) p += 0.3;
+  return p;
 }
 
-/** The SAN chess.js gives for the first variant that is legal, or null. */
-function legalSan(chess: Chess, texts: string[]): string | null {
-  for (const t of texts) {
-    try {
-      const m = chess.move(t);
-      chess.undo();
-      return m.san;
-    } catch {
-      // not legal in this position
-    }
-  }
-  return null;
+interface Where {
+  lastTo: string | null; // destination of the previous ply
+  moveNumber: number;
 }
 
-function candidatesFor(fen: string, ply: PlyInput, lang: string, edit: string | undefined): Candidate[] {
-  const chess = new Chess(fen);
-  const legal = chess.moves();
-  if (legal.length === 0) return [];
+function candidates(
+  pos: Position,
+  info: ReadingInfo,
+  edit: string | undefined,
+  backtracking: boolean,
+  where: Where = { lastTo: null, moveNumber: 1 },
+  allGuesses = false,
+): { cands: Candidate[]; blankGuess: boolean } {
+  if (pos.sans.length === 0) return { cands: [], blankGuess: false };
 
   if (edit !== undefined) {
     // The person's own entry is final: legal or not, nothing else is tried.
-    const san = legalSan(chess, moveVariants(edit, "en"));
-    return san ? [{ san, cost: 0, source: "edit" }] : [];
+    const e = prepare({ written: edit, san: edit, alternatives: [], legibility: "clear" }, "en");
+    return { cands: exact(pos, e.primary).map((i) => ({ san: pos.sans[i], cost: 0, source: "edit" })), blankGuess: false };
   }
 
-  const r = ply.reading;
   const out = new Map<string, Candidate>();
-  const add = (san: string, cost: number, source: ChoiceSource) => {
-    const marks = r ? markerCost(r.written || r.san, san) : 0;
+  const add = (i: number, cost: number, source: ChoiceSource) => {
+    const san = pos.sans[i];
+    const total = cost + markerCost(info.marks, san);
     const prev = out.get(san);
-    if (!prev || prev.cost > cost + marks) out.set(san, { san, cost: cost + marks, source });
+    if (!prev || prev.cost > total) out.set(san, { san, cost: total, source });
   };
 
-  const legibility = r?.legibility ?? "illegible";
-  const primary = r && r.san.trim() ? legalSan(chess, moveVariants(r.san, "en")) : null;
-  const override = primary && legibility === "clear" ? COST.overrideClear : 0;
+  const leg = info.legibility;
+  const primary = exact(pos, info.primary);
+  const clearLegal = primary.length > 0 && leg === "clear";
+  const override = clearLegal ? COST.override : 0;
 
-  if (primary) add(primary, legibility === "clear" ? 0 : COST.readingUnclear, "reading");
-  if (r) {
-    r.alternatives.slice(0, 3).forEach((alt, k) => {
-      const san = legalSan(chess, moveVariants(alt, "en"));
-      if (san) add(san, override + COST.alternative + 0.1 * k, "alternative");
-    });
-    if (r.written.trim()) {
-      const san = legalSan(chess, moveVariants(r.written, lang));
-      if (san) add(san, override + COST.written, "written");
+  const extra = primary.length > 1 ? COST.ambiguous : 0;
+  for (const i of primary) add(i, (leg === "clear" ? 0 : COST.readingUnclear) + extra, "reading");
+  info.alternatives.forEach((alt, k) => {
+    for (const i of exact(pos, alt)) add(i, override + COST.alternative + 0.1 * k, "alternative");
+  });
+  for (const i of exact(pos, info.written)) add(i, override + COST.written, "written");
+
+  // A clear, legal reading only competes with Claude's own alternatives,
+  // except while backtracking.
+  if (clearLegal && !backtracking) return { cands: sorted(out), blankGuess: false };
+
+  const natural = (i: number) => prior(pos.parsed[i], pos.sans[i], where.lastTo, where.moveNumber);
+  if (info.blank) {
+    pos.sans.forEach((_, i) => add(i, COST.guess.illegible + natural(i), "guess"));
+    return { cands: sorted(out), blankGuess: true };
+  }
+
+  const fix: ChoiceSource = override ? "backtrack" : "near-miss";
+  const dist = pos.sans.map((san, i) => distanceTo(info, pos.parsed[i], san));
+  dist.forEach((d, i) => {
+    if (d <= COST.nearMissLimit[leg]) add(i, override + COST.nearMiss[leg] + d, fix);
+  });
+
+  // Guesses, closest first. For a legal but doubtful reading only a few.
+  let order = pos.sans.map((_, i) => i).sort((a, b) => dist[a] - dist[b]);
+  if (primary.length > 0 && !allGuesses) order = order.slice(0, GUESSES_FOR_LEGAL);
+  for (const i of order) {
+    const d = Math.min(dist[i], COST.guessDistanceCap);
+    add(i, override + COST.guess[leg] + COST.guessPerDistance * d + natural(i), override ? "backtrack" : "guess");
+  }
+  return { cands: sorted(out), blankGuess: false };
+}
+
+function sorted(m: Map<string, Candidate>): Candidate[] {
+  return [...m.values()].sort((a, b) => a.cost - b.cost);
+}
+
+// ---- the search ----
+
+interface Node {
+  fen: string;
+  cost: number;
+  cand: Candidate | null;
+  parent: Node | null;
+  depth: number; // plies played
+  lastFix: number; // ply index of the most recent fix, or -99
+  protectUntil: number; // kept in the beam up to this ply (backtracked paths)
+}
+
+interface Ctx {
+  plies: PlyInput[];
+  infos: ReadingInfo[];
+  edits: Record<number, string>;
+  positions: Positions;
+  best: { node: Node; at: number; total: number } | null; // the cheapest place to give up
+}
+
+const FIXES = new Set<ChoiceSource>(["near-miss", "guess", "backtrack"]);
+
+function giveUp(ctx: Ctx, node: Node, at: number) {
+  const total = node.cost + COST.stopPerPly * (ctx.plies.length - at);
+  if (!ctx.best || total < ctx.best.total) ctx.best = { node, at, total };
+}
+
+function lastTo(node: Node): string | null {
+  const m = node.cand ? parseMove(cleanMoveText(node.cand.san)) : null;
+  return m && !m.castle ? m.to : null;
+}
+
+function where(ctx: Ctx, node: Node): Where {
+  return { lastTo: lastTo(node), moveNumber: ctx.plies[node.depth]?.moveNumber ?? 1 };
+}
+
+function candidatesAt(ctx: Ctx, node: Node, backtracking: boolean, allGuesses = false) {
+  const i = node.depth;
+  return candidates(ctx.positions.get(node.fen), ctx.infos[i], ctx.edits[i], backtracking, where(ctx, node), allGuesses);
+}
+
+/** The extra cost of a candidate given the path so far (clustered fixes). */
+function pathCost(ctx: Ctx, node: Node, c: Candidate): number {
+  const i = node.depth;
+  const fix = FIXES.has(c.source) && !ctx.infos[i].blank;
+  return fix && i - node.lastFix <= CLUSTER_PLIES ? COST.cluster : 0;
+}
+
+function child(ctx: Ctx, node: Node, c: Candidate, fen: string): Node {
+  const fix = FIXES.has(c.source) && !ctx.infos[node.depth].blank;
+  return {
+    fen,
+    cost: node.cost + c.cost + pathCost(ctx, node, c),
+    cand: c,
+    parent: node,
+    depth: node.depth + 1,
+    lastFix: fix ? node.depth : node.lastFix,
+    protectUntil: node.protectUntil,
+  };
+}
+
+function play(fen: string, san: string): string {
+  const chess = new Chess(fen);
+  chess.move(san);
+  return chess.fen();
+}
+
+/** Advance a beam by one ply. Builds positions only for the paths it keeps. */
+function step(ctx: Ctx, beam: Node[], i: number): { next: Node[]; width: number } {
+  const proposals: { parent: Node; cand: Candidate; cost: number }[] = [];
+  let blank = false;
+  for (const node of beam) {
+    // Stopping here (ply i left for the person) is always an option.
+    giveUp(ctx, node, i);
+    const { cands, blankGuess } = candidatesAt(ctx, node, false);
+    blank ||= blankGuess;
+    for (const c of cands) proposals.push({ parent: node, cand: c, cost: node.cost + c.cost + pathCost(ctx, node, c) });
+  }
+  proposals.sort((a, b) => a.cost - b.cost);
+  const width = blank ? BEAM_WIDTH_BLANK : BEAM_WIDTH;
+  const ceiling = ctx.best?.total ?? Infinity;
+  const next: Node[] = [];
+  const seen = new Set<string>();
+  const boards = new Map<Node, Chess>();
+  const extend = (p: (typeof proposals)[number]) => {
+    let chess = boards.get(p.parent);
+    if (!chess) boards.set(p.parent, (chess = new Chess(p.parent.fen)));
+    chess.move(p.cand.san);
+    const fen = chess.fen();
+    chess.undo();
+    if (seen.has(fen)) return false; // a cheaper path already reached it
+    seen.add(fen);
+    next.push(child(ctx, p.parent, p.cand, fen));
+    return true;
+  };
+  for (const p of proposals) {
+    if (next.length >= width || p.cost >= ceiling) break;
+    extend(p);
+  }
+  // Protected paths keep their cheapest continuation.
+  const extended = new Set(next.map((n) => n.parent));
+  for (const p of proposals) {
+    if (p.parent.protectUntil < i || extended.has(p.parent) || p.cost >= ceiling) continue;
+    if (extend(p)) extended.add(p.parent);
+  }
+  return { next, width };
+}
+
+/**
+ * Ply j is in trouble on the path ending at `node`. Try changing one earlier
+ * move that could be to blame, replay the plies after it as read, and keep
+ * the paths on which ply j then reads cheaply.
+ */
+function backtrack(ctx: Ctx, node: Node, j: number, budget: number): Node[] {
+  const target = ctx.infos[j].primary[0] ?? ctx.infos[j].alternatives.find((a) => a.length)?.[0];
+  if (!target) return [];
+  const chain: Node[] = [];
+  for (let n: Node | null = node; n; n = n.parent) chain.unshift(n); // chain[k]: before ply k
+  const side = ctx.plies[j].color;
+  const blamed = (k: number) => {
+    if (k >= j - RECENT_PLIES) return true;
+    if (ctx.plies[k].color !== side) return false;
+    const m = parseMove(cleanMoveText(chain[k + 1].cand!.san));
+    if (!m || m.castle || target.castle) return Boolean(m?.castle && target.castle);
+    return m.piece === target.piece || m.to === target.to;
+  };
+
+  const found: Node[] = [];
+  for (let k = j - 1; k >= Math.max(0, j - WINDOW); k--) {
+    if (ctx.edits[k] !== undefined || !blamed(k)) continue;
+    const was = chain[k + 1].cand!.san;
+    // Every legal move is worth a try here: only the replay decides.
+    const options = candidatesAt(ctx, chain[k], true, true).cands.filter((c) => c.san !== was);
+    for (const c of options) {
+      let cur = { ...child(ctx, chain[k], c, play(chain[k].fen, c.san)), protectUntil: j + PROTECT_PLIES };
+      if (cur.cost >= budget) continue;
+      // Replay the plies after k as read, then ply j.
+      for (let m = k + 1; m <= j && cur; m++) {
+        const next = candidatesAt(ctx, cur, false).cands[0];
+        if (!next || (m === j && next.cost >= TROUBLE)) {
+          cur = null as unknown as Node;
+          break;
+        }
+        cur = child(ctx, cur, next, play(cur.fen, next.san));
+        if (cur.cost >= budget) {
+          cur = null as unknown as Node;
+          break;
+        }
+      }
+      if (cur) found.push(cur);
     }
   }
-  // A clear, legal reading: a near miss would cost more than stopping, so
-  // only Claude's own alternatives compete with it.
-  if (override) return [...out.values()].sort((a, b) => a.cost - b.cost);
+  return found.sort((a, b) => a.cost - b.cost).slice(0, PROTECTED_SLOTS);
+}
 
-  // Near misses: legal moves about one character away from what was read.
-  const readings: ParsedMove[] = [];
-  if (r) {
-    for (const t of [r.san, ...r.alternatives]) for (const v of moveVariants(t, "en")) readings.push(parseMove(v)!);
-    for (const v of moveVariants(r.written, lang)) readings.push(parseMove(v)!);
+function merge(a: Node[], b: Node[], width: number): Node[] {
+  const byFen = new Map<string, Node>();
+  for (const n of [...a, ...b]) {
+    const prev = byFen.get(n.fen);
+    if (!prev || n.cost < prev.cost) byFen.set(n.fen, n);
   }
-  const parsedReadings = readings.filter(Boolean);
-  if (parsedReadings.length) {
-    for (const san of legal) {
-      const m = parseMove(cleanMoveText(san));
-      if (!m) continue;
-      const d = Math.min(...parsedReadings.map((p) => readingDistance(p, m)));
-      if (d <= NEAR_MISS_LIMIT) add(san, override + COST.nearMiss[legibility] + d, "near-miss");
+  return [...byFen.values()].sort((x, y) => x.cost - y.cost).slice(0, width);
+}
+
+function path(node: Node): Candidate[] {
+  const out: Candidate[] = [];
+  for (let n: Node | null = node; n?.cand; n = n.parent) out.push(n.cand);
+  return out.reverse();
+}
+
+function search(ctx: Ctx, start: string): { choices: Candidate[]; stoppedAt: number | null } {
+  const n = ctx.plies.length;
+  let beam: Node[] = [{ fen: start, cost: 0, cand: null, parent: null, depth: 0, lastFix: -99, protectUntil: -1 }];
+  let backtracks = 0;
+  let reached = 0;
+
+  for (let i = 0; i < n && beam.length; i++) {
+    const before = beam[0];
+    let { next, width } = step(ctx, beam, i);
+    // Never rewrite earlier moves to make the person's own entry fit: if it
+    // is not legal, say so at that move.
+    const trouble = next.length === 0 || next[0].cost - before.cost >= TROUBLE;
+    if (trouble && ctx.edits[i] === undefined && backtracks < MAX_BACKTRACKS) {
+      backtracks++;
+      const found = backtrack(ctx, before, i, ctx.best?.total ?? Infinity);
+      next = merge(next, found, width + found.length);
     }
+    const ceiling = ctx.best?.total ?? Infinity;
+    beam = next.filter((node) => node.cost < ceiling);
+    reached = i + 1;
   }
 
-  // A blank or unreadable cell: any legal move is possible, and the moves
-  // after it decide.
-  if (isBlank(r) || legibility === "illegible" || !r!.san.trim()) {
-    for (const san of legal) add(san, COST.guess, "guess");
-  }
-
-  return [...out.values()].sort((a, b) => a.cost - b.cost);
-}
-
-function noteFor(ply: PlyInput, c: Candidate): string {
-  const read = ply.reading?.san || ply.reading?.written || "";
-  switch (c.source) {
-    case "edit":
-      return "Entered by you.";
-    case "reading":
-      return ply.reading?.legibility === "clear" ? "" : `Handwriting unclear; read as ${c.san}.`;
-    case "alternative":
-      return `Read as "${read}"; the alternative reading ${c.san} fits the game better.`;
-    case "written":
-      return `Used the move as written ("${ply.reading?.written}") in the sheet's notation: ${c.san}.`;
-    case "near-miss":
-      return `Read as "${read}", which does not fit here; ${c.san} is the closest legal move.`;
-    case "guess":
-      return `The cell was blank or unreadable; ${c.san} fits the moves that follow.`;
-  }
-}
-
-function statusFor(c: Candidate, ply: PlyInput): PlyStatus {
-  if (c.source === "edit") return "ok";
-  if (c.source === "reading") return ply.reading?.legibility === "clear" ? "ok" : "unsure";
-  return "fixed";
-}
-
-/** Legal moves to offer in a picker: the closest readings first. */
-function suggestionsFor(fen: string, ply: PlyInput, lang: string): string[] {
-  const sans = candidatesFor(fen, ply, lang, undefined)
-    .filter((c) => c.source !== "guess")
-    .slice(0, 6)
-    .map((c) => c.san);
-  for (const s of new Chess(fen).moves()) if (!sans.includes(s)) sans.push(s);
-  return sans;
+  const done = beam.length && reached === n ? beam[0] : null;
+  if (done && (!ctx.best || done.cost <= ctx.best.total)) return { choices: path(done), stoppedAt: null };
+  if (ctx.best) return { choices: path(ctx.best.node), stoppedAt: ctx.best.at };
+  return { choices: [], stoppedAt: 0 };
 }
 
 /** Replay using only the primary readings and edits. Null if any ply fails. */
-function primaryPath(plies: PlyInput[], start: string, edits: Record<number, string>): Candidate[] | null {
+function primaryPath(ctx: Ctx, start: string): Candidate[] | null {
   const chess = new Chess(start);
   const out: Candidate[] = [];
-  for (let i = 0; i < plies.length; i++) {
-    const r = plies[i].reading;
-    const text = edits[i] ?? (r && r.legibility !== "illegible" ? r.san : "");
-    const san = text.trim() ? legalSan(chess, moveVariants(text, "en")) : null;
-    if (!san) return null;
+  for (let i = 0; i < ctx.plies.length; i++) {
+    const pos = ctx.positions.get(chess.fen());
+    const edit = ctx.edits[i];
+    const info = ctx.infos[i];
+    let matches: number[];
+    if (edit !== undefined) matches = exact(pos, prepare({ written: edit, san: edit, alternatives: [], legibility: "clear" }, "en").primary);
+    else if (info.legibility === "illegible") return null;
+    else matches = exact(pos, info.primary);
+    if (matches.length !== 1) return null;
+    const san = pos.sans[matches[0]];
     chess.move(san);
-    out.push({ san, cost: 0, source: edits[i] !== undefined ? "edit" : "reading" });
+    out.push({ san, cost: 0, source: edit !== undefined ? "edit" : "reading" });
   }
   return out;
 }
 
-function search(plies: PlyInput[], start: string, lang: string, edits: Record<number, string>) {
-  let beam: BeamState[] = [{ fen: start, cost: 0, choices: [] }];
-  let stopped: { state: BeamState; at: number; total: number } | null = null;
+// ---- results ----
 
-  for (let i = 0; i < plies.length; i++) {
-    const next: BeamState[] = [];
-    const seen = new Map<string, number>();
-    let guessed = false;
-    for (const state of beam) {
-      const cands = candidatesFor(state.fen, plies[i], lang, edits[i]);
-      if (cands.length === 0) {
-        const total = state.cost + COST.stop;
-        if (!stopped || total < stopped.total) stopped = { state, at: i, total };
-        continue;
-      }
-      const hasGuess = cands.some((c) => c.source === "guess");
-      guessed ||= hasGuess;
-      for (const c of hasGuess ? cands : cands.slice(0, 8)) {
-        const chess = new Chess(state.fen);
-        chess.move(c.san);
-        const fen = chess.fen();
-        const cost = state.cost + c.cost;
-        // Two paths reaching the same position: keep the cheaper.
-        const at = seen.get(fen);
-        if (at !== undefined && next[at].cost <= cost) continue;
-        const s: BeamState = { fen, cost, choices: [...state.choices, c] };
-        if (at !== undefined) next[at] = s;
-        else {
-          seen.set(fen, next.length);
-          next.push(s);
-        }
-      }
-    }
-    next.sort((a, b) => a.cost - b.cost);
-    // Drop paths that already cost more than giving up would.
-    const ceiling = Math.min(stopped?.total ?? Infinity, (next[0]?.cost ?? 0) + COST.stop);
-    beam = next.filter((s) => s.cost <= ceiling).slice(0, guessed ? BEAM_WIDTH_AFTER_GUESS : BEAM_WIDTH);
-    if (beam.length === 0) break;
+function noteFor(info: ReadingInfo, c: Candidate, support: number): string {
+  const read = info.text;
+  const fits = support > 0 ? ` The next ${support} move${support > 1 ? "s" : ""} fit as read.` : "";
+  switch (c.source) {
+    case "edit":
+      return "Entered by you.";
+    case "reading":
+      return info.legibility === "clear" ? "" : `Handwriting unclear; read as ${c.san}.`;
+    case "alternative":
+      return `Read as "${read}"; the alternative reading ${c.san} fits the game.${fits}`;
+    case "written":
+      return `Used the move as written ("${read}") in the sheet's notation: ${c.san}.${fits}`;
+    case "near-miss":
+      return `Read as "${read}", which does not fit here; ${c.san} is the closest legal move.${fits}`;
+    case "backtrack":
+      return `Read as "${read}", which is legal, but the moves after it only fit ${c.san}.${fits}`;
+    case "guess":
+      return info.blank
+        ? `The cell was blank or unreadable; ${c.san} is a guess.${fits}`
+        : `Read as "${read}", which does not fit here; ${c.san} is a guess.${fits}`;
   }
+}
 
-  const finished = beam[0];
-  if (finished && finished.choices.length === plies.length && (!stopped || finished.cost <= stopped.total)) {
-    return { choices: finished.choices, stoppedAt: null };
-  }
-  return { choices: stopped!.state.choices, stoppedAt: stopped!.at };
+function statusFor(c: Candidate, info: ReadingInfo): PlyStatus {
+  if (c.source === "edit") return "ok";
+  if (c.source === "reading") return info.legibility === "clear" && c.cost < COST.ambiguous ? "ok" : "unsure";
+  return "fixed";
+}
+
+/** Legal moves to offer in a picker, closest to the reading first. */
+function suggestionsFor(ctx: Ctx, fen: string, i: number): string[] {
+  const pos = ctx.positions.get(fen);
+  const first = candidates(pos, ctx.infos[i], undefined, true, { lastTo: null, moveNumber: ctx.plies[i].moveNumber })
+    .cands.slice(0, 8)
+    .map((c) => c.san);
+  return [...new Set([...first, ...pos.sans])];
 }
 
 /**
@@ -266,34 +560,49 @@ export function analyzeGame(
   opts: { lang?: string; edits?: Record<number, string>; startFen?: string } = {},
 ): Analysis {
   const lang = opts.lang ?? "en";
-  const edits = opts.edits ?? {};
   const start = new Chess(opts.startFen).fen();
+  const ctx: Ctx = {
+    plies,
+    infos: plies.map((p) => prepare(p.reading, lang)),
+    edits: opts.edits ?? {},
+    positions: new Positions(),
+    best: null,
+  };
 
-  const fast = primaryPath(plies, start, edits);
-  const { choices, stoppedAt } = fast ? { choices: fast, stoppedAt: null } : search(plies, start, lang, edits);
+  const fast = primaryPath(ctx, start);
+  const { choices, stoppedAt } = fast ? { choices: fast, stoppedAt: null } : search(ctx, start);
+
+  // How many plies after each one were played exactly as read.
+  const support = choices.map(() => 0);
+  for (let i = choices.length - 2; i >= 0; i--) {
+    const nxt = choices[i + 1].source;
+    support[i] = nxt === "reading" || nxt === "edit" ? 1 + support[i + 1] : 0;
+  }
 
   const results: PlyResult[] = [];
   const replay = new Chess(start);
   plies.forEach((ply, index) => {
     const c = choices[index];
+    const info = ctx.infos[index];
     if (c) {
       const fenBefore = replay.fen();
       replay.move(c.san);
-      const status = statusFor(c, ply);
+      const status = statusFor(c, info);
       results.push({
         ...ply,
         index,
         status,
         san: c.san,
         source: c.source,
-        note: noteFor(ply, c),
+        note: noteFor(info, c, support[index]),
         fenBefore,
         fenAfter: replay.fen(),
-        suggestions: status === "ok" ? [] : suggestionsFor(fenBefore, ply, lang),
+        suggestions: status === "ok" ? [] : suggestionsFor(ctx, fenBefore, index),
+        support: status === "fixed" ? support[index] : 0,
       });
     } else if (index === stoppedAt) {
       const fenBefore = replay.fen();
-      const read = edits[index] ?? (ply.reading?.san || ply.reading?.written || "");
+      const read = ctx.edits[index] ?? info.text;
       const over = replay.isCheckmate()
         ? " The game is already checkmate."
         : replay.isStalemate()
@@ -305,10 +614,15 @@ export function analyzeGame(
         status: "illegal",
         san: null,
         source: null,
-        note: `"${read || "(blank)"}" is not a legal move here and no close reading fits.${over}`,
+        note: over
+          ? `"${read || "(blank)"}" comes after the end of the game.${over}`
+          : ctx.edits[index] !== undefined
+            ? `"${read}" is not a legal move here. Pick one of the legal moves below.`
+            : `"${read || "(blank)"}" does not fit here, and the moves after it do not settle what it was. Pick the right move: the closest are listed first.`,
         fenBefore,
         fenAfter: null,
-        suggestions: over ? [] : suggestionsFor(fenBefore, ply, lang),
+        suggestions: over ? [] : suggestionsFor(ctx, fenBefore, index),
+        support: 0,
       });
     } else {
       results.push({
@@ -321,6 +635,7 @@ export function analyzeGame(
         fenBefore: null,
         fenAfter: null,
         suggestions: [],
+        support: 0,
       });
     }
   });

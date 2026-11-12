@@ -173,3 +173,29 @@ export function markerCost(written: string, san: string): number {
   if (wroteCheck && !isCheck && !isMate) return 0.15;
   return 0;
 }
+
+function confusableChar(a: string, b: string): boolean {
+  return confusable(a, b, FILE_CONFUSIONS) || confusable(a, b, RANK_CONFUSIONS);
+}
+
+/**
+ * Distance between a partly legible reading and a legal move, for readings
+ * with _ for characters that could not be made out (N_3, _xd4) or that do not
+ * parse as SAN. A weighted edit distance: _ matches any one character for
+ * 0.25, easily confused characters cost 0.6, anything else 1. Capture marks
+ * are ignored, since players often leave them out.
+ */
+export function patternDistance(pattern: string, san: string): number {
+  const a = pattern.replace(/x/g, "");
+  const b = cleanMoveText(san).replace(/x/g, "");
+  const sub = (p: string, q: string) => (p === q ? 0 : p === "_" ? 0.25 : confusableChar(p, q) ? 0.6 : 1);
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + sub(a[i - 1], b[j - 1]));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}

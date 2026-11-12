@@ -740,3 +740,10 @@ table.moves {
   margin-top: 24px;
   text-align: center;
 }
+
+.checking {
+  font-weight: 400;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-left: 8px;
+}

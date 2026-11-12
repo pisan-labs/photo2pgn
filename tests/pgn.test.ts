@@ -63,8 +63,8 @@ describe("buildPgn", () => {
   });
 
   it("stops at the first unreadable move with a comment", () => {
-    const rows = rowsFrom(OPERA_GAME, { 10: { san: "Ka5", written: "Ka5" } });
-    const a = analyzeGame(rowsToPlies(rows));
+    // A move the person entered that is not legal stops the game there.
+    const a = analyzeGame(rowsToPlies(rowsFrom(OPERA_GAME)), { edits: { 10: "Bd4" } });
     const pgn = buildPgn({ ...ex.headers, result: "*" }, a);
     expect(pgn.replace(/\s+/g, " ")).toContain("{Moves from 6. on could not be read as legal moves.} *");
     const chess = new Chess();

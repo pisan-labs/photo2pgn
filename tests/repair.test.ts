@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeGame, rowsToPlies } from "../src/lib/repair";
+import type { PlyReading } from "../src/lib/schema";
 import { OPERA_GAME, rowsFrom } from "./helpers";
 
 const analyze = (...args: Parameters<typeof rowsFrom>) => analyzeGame(rowsToPlies(rowsFrom(...args)));
@@ -83,13 +84,70 @@ describe("analyzeGame", () => {
     expect(a.plies[2]).toMatchObject({ san: "Nf3", status: "fixed", source: "written" });
   });
 
-  it("stops at a move nothing can repair and leaves the rest unchecked", () => {
+  it("guesses a clearly written but impossible move when the rest of the game fits", () => {
+    // 6. Bc4 written as "Ka5". Qa3 and Bc4 both lead to the same game, so
+    // either is a fair guess; the right one must be offered.
     const a = analyze(OPERA_GAME, { 10: { san: "Ka5", written: "Ka5" } });
-    expect(a.stoppedAt).toBe(10);
-    expect(a.plies[10].status).toBe("illegal");
-    expect(a.plies[10].suggestions.length).toBeGreaterThan(0);
-    expect(a.plies[11].status).toBe("unchecked");
-    expect(a.legalCount).toBe(10);
+    expect(a.stoppedAt).toBeNull();
+    expect(a.plies[10]).toMatchObject({ status: "fixed", source: "guess" });
+    expect(a.plies[10].support).toBeGreaterThanOrEqual(20);
+    expect(a.plies[10].suggestions).toContain("Bc4");
+    expect(a.plies[10].note).toMatch(/next \d+ moves fit/);
+  });
+
+  it("stops instead of forcing a different game onto the sheet", () => {
+    const OTHER = "c4 e6 Nc3 d5 cxd5 exd5 Bg5 Be7 e3 O-O Bd3 Nbd7 Qc2 Re8 Nge2 Nf8 O-O-O c6 h3 Qa5 Kb1 b5".split(" ");
+    const a = analyze([...OPERA_GAME.slice(0, 10), ...OTHER]);
+    expect(a.stoppedAt).not.toBeNull();
+    expect(a.stoppedAt!).toBeLessThanOrEqual(12);
+    expect(a.plies.filter((p) => p.status === "fixed")).toHaveLength(0);
+    expect(a.plies[a.stoppedAt!].status).toBe("illegal");
+    expect(a.plies[a.stoppedAt! + 1].status).toBe("unchecked");
+  });
+
+  it("reads a sheet in awful handwriting: every third move misread and unclear", () => {
+    const swap: Record<string, string> = { "4": "6", "5": "3", "3": "8", "6": "5", f: "e", e: "c", d: "a", c: "e", b: "h", g: "a" };
+    const misread: Record<number, Partial<PlyReading>> = {};
+    OPERA_GAME.forEach((m, i) => {
+      const k = [...m].findIndex((ch) => swap[ch] !== undefined);
+      if (i % 3 !== 1 || k < 0) return;
+      const w = m.slice(0, k) + swap[m[k]] + m.slice(k + 1);
+      misread[i] = { san: w, written: w, legibility: "unclear" };
+    });
+    const t = performance.now();
+    const a = analyze(OPERA_GAME, misread);
+    expect(performance.now() - t).toBeLessThan(3000);
+    expect(a.stoppedAt).toBeNull();
+    const idx = Object.keys(misread).map(Number);
+    const right = idx.filter((i) => a.plies[i].san === OPERA_GAME[i].replace("#", "#")).length;
+    expect(right).toBeGreaterThanOrEqual(idx.length - 1);
+    // Every misread move is flagged for review, and the right move is offered.
+    for (const i of idx) {
+      expect(a.plies[i].status).not.toBe("ok");
+      expect(a.plies[i].suggestions).toContain(OPERA_GAME[i]);
+    }
+  });
+
+  it("uses partial readings with _ and guesses three blank cells in a row", () => {
+    const a = analyze(OPERA_GAME, {
+      4: { san: "", written: "_4", legibility: "illegible" }, // 3. d4
+      13: { san: "", written: "Q_7", legibility: "illegible" }, // 7...Qe7
+      18: { san: "", written: "", legibility: "illegible" }, // 10. Nxb5
+      19: { san: "", written: "", legibility: "illegible" }, // 10...cxb5
+      20: { san: "", written: "", legibility: "illegible" }, // 11. Bxb5+
+    });
+    expect(a.stoppedAt).toBeNull();
+    expect([4, 13, 18, 19, 20].map((i) => a.plies[i].san)).toEqual(["d4", "Qe7", "Nxb5", "cxb5", "Bxb5+"]);
+    expect(a.endState).toBe("checkmate");
+  });
+
+  it("backtracks to a clearly written legal move that breaks a later one", () => {
+    // 3...Bg4 written clearly as Be6, no alternatives: 4...Bxf3 is then impossible.
+    const a = analyze(OPERA_GAME, { 5: { san: "Be6", written: "Be6" } });
+    expect(a.stoppedAt).toBeNull();
+    expect(a.plies[5]).toMatchObject({ san: "Bg4", status: "fixed", source: "backtrack" });
+    expect(a.plies.filter((p) => p.status === "fixed")).toHaveLength(1);
+    expect(a.plies[5].note).toContain("legal, but the moves after it only fit Bg4");
   });
 
   it("takes the person's edit as final", () => {

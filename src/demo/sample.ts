@@ -1,7 +1,8 @@
 // A worked example that needs no API call: Morphy's 1858 Opera game, as if
 // read from a handwritten sheet, with the kinds of misreadings real sheets
-// produce. Shows every review state: a near miss, an alternative found nine
-// moves back, an unsure reading, castling with zeros, and a move nothing fits.
+// produce: a near miss, an alternative found nine moves back, an unsure
+// reading, castling written with zeros, and a smudged move near the end that
+// is left for the person to pick.
 import type { Extraction, PlyReading } from "../lib/schema";
 
 const MOVES =

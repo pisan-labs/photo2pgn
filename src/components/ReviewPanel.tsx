@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Extraction, GameHeaders } from "../lib/schema";
-import { analyzeGame, rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
+import { rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
+import { useAnalysis } from "../lib/useAnalysis";
 import { buildPgn, pgnFileName } from "../lib/pgn";
 import { Board, moveSquares } from "./Board";
 
@@ -35,13 +36,48 @@ function cellText(p: PlyResult, edits: Record<number, string>) {
   return edits[p.index] ?? (p.reading?.san || p.reading?.written || "?");
 }
 
-export function ReviewPanel({ session, onChange, onStartOver }: Props) {
-  const { extraction, edits, headers } = session;
+export function ReviewPanel(props: Props) {
+  const { extraction, edits } = props.session;
   const plies = useMemo(() => rowsToPlies(extraction.rows), [extraction]);
-  const analysis = useMemo(
-    () => analyzeGame(plies, { lang: extraction.notationLanguage || "en", edits }),
-    [plies, extraction.notationLanguage, edits],
+  const { analysis, busy } = useAnalysis(plies, extraction.notationLanguage || "en", edits);
+  if (!extraction.isScoresheet || plies.length === 0) return <NoMoves {...props} />;
+  if (!analysis) {
+    return (
+      <section className="panel reading" aria-live="polite">
+        <div className="spinner" aria-hidden="true" />
+        <h2>Checking the moves…</h2>
+        <p>Replaying the game and working out unclear moves.</p>
+      </section>
+    );
+  }
+  return <Review {...props} plies={plies} analysis={analysis} busy={busy} />;
+}
+
+function NoMoves({ session, onStartOver }: Props) {
+  const { extraction } = session;
+  return (
+    <section className="panel">
+      <h2>No moves found</h2>
+      <p>
+        This does not look like a chess scoresheet, or no moves could be read.
+        {extraction.notes && ` Claude noted: ${extraction.notes}`}
+      </p>
+      <button type="button" className="primary" onClick={onStartOver}>
+        Try another photo
+      </button>
+    </section>
   );
+}
+
+function Review({
+  session,
+  onChange,
+  onStartOver,
+  plies,
+  analysis,
+  busy,
+}: Props & { plies: ReturnType<typeof rowsToPlies>; analysis: Analysis; busy: boolean }) {
+  const { extraction, edits, headers } = session;
   const firstToCheck = analysis.plies.find((p) => p.status !== "ok")?.index ?? null;
   const [selected, setSelected] = useState<number | null>(firstToCheck ?? (plies.length ? 0 : null));
   const [commentFixes, setCommentFixes] = useState(false);
@@ -86,26 +122,13 @@ export function ReviewPanel({ session, onChange, onStartOver }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [analysis.plies.length]);
 
-  if (!extraction.isScoresheet || plies.length === 0) {
-    return (
-      <section className="panel">
-        <h2>No moves found</h2>
-        <p>
-          This does not look like a chess scoresheet, or no moves could be read.
-          {extraction.notes && ` Claude noted: ${extraction.notes}`}
-        </p>
-        <button type="button" className="primary" onClick={onStartOver}>
-          Try another photo
-        </button>
-      </section>
-    );
-  }
-
   return (
     <div className="review">
       <section className="panel summary" aria-live="polite">
         <div>
-          <h2>Check the moves</h2>
+          <h2>
+            Check the moves{busy && <span className="checking"> Checking…</span>}
+          </h2>
           <p>
             Read {Math.ceil(plies.length / 2)} moves.{" "}
             {counts.illegal > 0
@@ -329,6 +352,12 @@ function PlyDetail({
             "(blank)"
           )}
         </dd>
+        {ply.sheetNumber !== ply.moveNumber && (
+          <>
+            <dt>Sheet row</dt>
+            <dd>{ply.sheetNumber}</dd>
+          </>
+        )}
         {ply.san && (
           <>
             <dt>In the PGN</dt>

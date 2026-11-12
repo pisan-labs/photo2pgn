@@ -4,11 +4,24 @@ Turn a photo of a handwritten chess tournament scoresheet into a PGN file.
 
 1. Take or upload a photo of the sheet (one or two pages).
 2. Claude reads every move cell, the header (players, event, date, round, ratings) and the result.
-3. A chess engine replays the game. It checks that each move is legal and repairs misreadings. It can use one of Claude's alternative readings, the move as written in the sheet's own language, or the legal move one misread character away. For a blank cell, it picks the move that fits the moves after it.
+3. A chess engine replays the game, checks every move is legal, and repairs misreadings, even on sheets in awful handwriting (see below).
 4. You review: corrected moves are amber, unclear ones blue, impossible ones red. Each move shows the board, what is on the sheet, and a list of the legal moves to pick from.
 5. Download the `.pgn` file or copy the text.
 
 The demo button runs the whole review on a sample game with no API call.
+
+## How bad handwriting is handled
+
+Claude transcribes what it sees, with `_` for characters it cannot make out and up to five alternative readings for unclear moves. `src/lib/repair.ts` then searches for the cheapest legal game that fits the readings:
+
+- **Readings, cheapest first:** the primary reading, one of Claude's alternatives, or the move as written in the sheet's language (piece letters in 15 languages).
+- **Near misses:** a legal move one or two misread characters away (5/6, 3/8, c/e, a/d and so on count as easy confusions).
+- **Guesses:** any legal move, priced by distance from what was read. A small bias favours natural moves (recaptures, captures, checks), which settles blank cells, even three in a row.
+- **Backtracking:** when a move cannot be fitted cheaply, the engine reconsiders earlier moves that could be to blame: the same side's moves with that piece, and the last four plies. It tries every legal move there, even for a clearly written move, and replays the game after it. A clear "Be6" that makes a later "Bxf3" impossible is found to be Bg4.
+- **Knowing when to stop:** stopping costs a little per unplayed move. Fixes that come in clusters cost extra, as do fixes to clearly written moves. A guess that makes the next 20 moves fit wins, but a different game forced onto the sheet, or a smudge two moves from the end, is left as one red move for you, with the closest legal moves offered first.
+- **Every change is flagged:** amber for corrected or guessed moves, which say how many following moves fit as read; blue for unclear readings; red for a move left to you. Your own entry is final; if it is illegal, the engine says so at that move instead of rewriting earlier ones.
+
+The analysis runs in a Web Worker and takes up to about a second on a hard sheet.
 
 ## How a conversion runs
 
@@ -116,7 +129,7 @@ If `NODE_OPTIONS` contains `--use-openssl-ca`, clear it for `netlify dev` (its w
 |---|---|
 | `src/lib/schema.ts` | What Claude returns (zod schema, shared by worker and browser) |
 | `src/lib/notation.ts` | Cleaning handwritten moves, piece letters in 15 languages, near-miss scoring |
-| `src/lib/repair.ts` | Replays the game and repairs misreadings (beam search) |
+| `src/lib/repair.ts` | Replays the game and repairs misreadings: beam search, guesses, backtracking |
 | `src/lib/pgn.ts` | PGN export |
 | `src/components/` | Upload, review, board |
 | `netlify/lib/` | Handlers, caps, Claude call, Blobs store, settings |

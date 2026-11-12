@@ -15,3 +15,7 @@
 2026-11-12 [decision] CLI runs claude -p --safe-mode --tools "" with photos as stream-json image blocks; strips ANTHROPIC_API_KEY/AUTH_TOKEN and stops if claude reports any API key source.
 
 2026-11-12 [code] Worker endpoints /api/worker/jobs (list, claim with 15 min lease, result checked by zod); retry up to 3, timeout with refund. Real local read of the demo sheet: 17 moves in 19 s.
+
+2026-11-12 [decision] Engine for awful handwriting: guesses with a natural-move prior, targeted backtracking (same piece, last 4 plies) even over clear moves, stop priced per unplayed ply, clustered fixes cost extra.
+
+2026-11-12 [code] repair.ts rewritten: matches readings against legal SANs (no chess.js per variant), lazy positions, _ wildcards, support counts; analysis in a Web Worker; PGN move numbers from the game.
