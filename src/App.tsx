@@ -17,7 +17,10 @@ interface PendingJob {
 }
 const MAX_PAGES = 2;
 
-type Phase = { kind: "upload" } | { kind: "reading"; startedAt: number } | { kind: "review" };
+type Phase =
+  | { kind: "upload" }
+  | { kind: "reading"; startedAt: number; waiting?: boolean }
+  | { kind: "review" };
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>({ kind: "upload" });
@@ -50,7 +53,7 @@ export default function App() {
   // A reload or a locked phone during the wait: pick the job up again.
   useEffect(() => {
     const pending = load<PendingJob>(PENDING_STORAGE);
-    if (pending && Date.now() - pending.startedAt < 16 * 60 * 1000) void follow(pending, []);
+    if (pending && Date.now() - pending.startedAt < 47 * 60 * 1000) void follow(pending, []);
     else remove(PENDING_STORAGE);
   }, []);
 
@@ -79,7 +82,11 @@ export default function App() {
     const ctrl = new AbortController();
     abort.current = ctrl;
     try {
-      const extraction = await waitForJob(pending.jobId, pending.viewToken, { signal: ctrl.signal });
+      const extraction = await waitForJob(pending.jobId, pending.viewToken, {
+        signal: ctrl.signal,
+        onStatus: (s) =>
+          setPhase({ kind: "reading", startedAt: pending.startedAt, waiting: s.reader === "local" && s.status === "queued" }),
+      });
       remove(PENDING_STORAGE);
       setSession({ extraction, edits: {}, headers: extraction.headers, images, demo: false });
       setPhase({ kind: "review" });
@@ -175,6 +182,7 @@ export default function App() {
         {phase.kind === "reading" && (
           <Reading
             startedAt={phase.startedAt}
+            waiting={Boolean(phase.waiting)}
             pages={pages}
             onCancel={() => {
               remove(PENDING_STORAGE);
@@ -197,7 +205,17 @@ export default function App() {
   );
 }
 
-function Reading({ startedAt, pages, onCancel }: { startedAt: number; pages: PreparedImage[]; onCancel: () => void }) {
+function Reading({
+  startedAt,
+  waiting,
+  pages,
+  onCancel,
+}: {
+  startedAt: number;
+  waiting: boolean;
+  pages: PreparedImage[];
+  onCancel: () => void;
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -207,10 +225,12 @@ function Reading({ startedAt, pages, onCancel }: { startedAt: number; pages: Pre
   return (
     <section className="panel reading" aria-live="polite">
       <div className="spinner" aria-hidden="true" />
-      <h2>Reading the handwriting…</h2>
+      <h2>{waiting ? "Waiting for a reader…" : "Reading the handwriting…"}</h2>
       <p>
-        {secs}s. A full sheet usually takes one to three minutes; Claude follows the game as it reads to sort out
-        unclear moves.
+        {secs}s.{" "}
+        {waiting
+          ? "Your photo is in line to be read. You can leave this page open, or come back to it later on this device."
+          : "A full sheet usually takes one to three minutes; Claude follows the game as it reads to sort out unclear moves."}
       </p>
       <div className="pages small">
         {pages.map((p, i) => (

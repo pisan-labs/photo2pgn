@@ -5,19 +5,29 @@
 // conversion if the owner's key is used, and starts the background worker.
 // The worker calls Claude (which can take minutes) and writes the result to
 // the job. The browser polls GET /api/jobs/:id until it is done.
+//
+// With a local reader (PGN_FREE_READER=local or local-then-api), free jobs
+// are not given to the background worker. They wait in a queue that the
+// owner's CLI (cli/pgn-worker.mjs) lists, claims, reads with a local Claude
+// Code, and answers through the /api/worker/* endpoints below.
 import type { AppConfig } from "./config";
 import type { KV } from "./kv";
 import { identify, sha256Hex, type Identity, type UserVerifier } from "./identity";
 import { dayKey, getQuota, release, reserve, weekKey, type QuotaStatus } from "./quota";
 import { ReadError, type ImageInput, type ReadResult } from "./claude";
-import type { Extraction } from "../../src/lib/schema";
+import { ExtractionSchema, type Extraction } from "../../src/lib/schema";
+import { SYSTEM_PROMPT, extractionJsonSchema, userText } from "./prompt";
 
 export type Mode = "free" | "own-key";
+export type Reader = "api" | "local";
 
 export interface Job {
   id: string;
   status: "queued" | "running" | "done" | "error";
   mode: Mode;
+  reader: Reader;
+  lease?: { workerId: string; until: string; tokenHash: string };
+  attempts?: number; // local reads that failed and were put back in the queue
   identity: string;
   createdAt: string;
   updatedAt: string;
@@ -57,6 +67,7 @@ const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif
 // A job that has not finished in this long is treated as failed (the
 // background function limit is 15 minutes).
 const STALE_MS = 16 * 60 * 1000;
+const MAX_LOCAL_ATTEMPTS = 3;
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -92,9 +103,16 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** Which reader a free conversion gets, or null if none is set up. */
+export function freeReaderFor(config: AppConfig): Reader | null {
+  if (config.limits.perDay <= 0) return null;
+  if (config.freeReader !== "api" && config.workerToken) return "local";
+  return config.ownerKey ? "api" : null;
+}
+
 export function publicQuota(config: AppConfig, status: QuotaStatus | null, identity: Identity) {
   return {
-    freeAvailable: Boolean(config.ownerKey) && config.limits.perDay > 0,
+    freeAvailable: freeReaderFor(config) !== null,
     signedIn: identity.kind === "user",
     quota: status,
   };
@@ -103,7 +121,9 @@ export function publicQuota(config: AppConfig, status: QuotaStatus | null, ident
 /** GET /api/quota */
 export async function handleQuota(req: Request, ip: string | undefined, deps: Deps): Promise<Response> {
   const identity = await identify(req, ip, deps.config.identitySalt, deps.verifyUser);
-  const status = deps.config.ownerKey ? await getQuota(deps.quota, identity.id, deps.config.limits, deps.now?.()) : null;
+  const status = freeReaderFor(deps.config)
+    ? await getQuota(deps.quota, identity.id, deps.config.limits, deps.now?.())
+    : null;
   return json(200, publicQuota(deps.config, status, identity));
 }
 
@@ -142,9 +162,9 @@ export async function handleConvert(req: Request, ip: string | undefined, deps: 
     if (!apiKey || !apiKey.startsWith("sk-ant-")) {
       return fail(400, "bad_key", "Enter an Anthropic API key (it starts with sk-ant-).");
     }
-  } else if (!config.ownerKey) {
-    return fail(503, "free_unavailable", "Free conversions are not available. Use your own API key.");
   }
+  const reader: Reader | null = mode === "own-key" ? "api" : freeReaderFor(config);
+  if (!reader) return fail(503, "free_unavailable", "Free conversions are not available. Use your own API key.");
 
   const identity = await identify(req, ip, config.identitySalt, deps.verifyUser);
   let reservedAt: string | null = null;
@@ -170,6 +190,7 @@ export async function handleConvert(req: Request, ip: string | undefined, deps: 
     id,
     status: "queued",
     mode,
+    reader,
     identity: identity.id,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -184,7 +205,8 @@ export async function handleConvert(req: Request, ip: string | undefined, deps: 
       images.map((img, n) => deps.jobs.setBytes(`img/${id}/${n}`, decodeBase64(img.data), { mediaType: img.mediaType })),
     );
     await deps.jobs.setJSON(`job/${id}`, job);
-    await deps.startWorker({ jobId: id, workerToken, apiKey });
+    if (reader === "local") await deps.jobs.setJSON(`queue/${id}`, { createdAt: job.createdAt });
+    else await deps.startWorker({ jobId: id, workerToken, apiKey });
   } catch (err) {
     console.error("convert: could not start job", id, err instanceof Error ? err.message : err);
     await finishJob(deps, job, { status: "error", error: { code: "start_failed", message: "Could not start the conversion. Try again." } });
@@ -217,6 +239,7 @@ async function finishJob(deps: Deps, job: Job, patch: Pick<Job, "status"> & Part
       await release(deps.quota, next.identity, new Date(next.reservedAt));
     }
     await deleteImages(deps, next);
+    await deps.jobs.delete(`queue/${job.id}`);
     return;
   }
 }
@@ -231,6 +254,7 @@ export async function runWorker(body: WorkerRequest, deps: Deps): Promise<void> 
     return;
   }
   if (job.status !== "queued") return; // a retry of a job already handled
+  if ((job.reader ?? "api") !== "api") return; // waiting for the CLI reader
 
   const claimed = await deps.jobs.setJSON(
     `job/${job.id}`,
@@ -262,21 +286,177 @@ export async function runWorker(body: WorkerRequest, deps: Deps): Promise<void> 
   }
 }
 
+/**
+ * A free job queued for the CLI reader that has waited past the fallback
+ * time goes to the owner's key instead (local-then-api only).
+ */
+async function maybeFallBack(deps: Deps, entry: { value: Job; etag: string }, now: Date): Promise<boolean> {
+  const { config } = deps;
+  const job = entry.value;
+  if (config.freeReader !== "local-then-api" || !config.ownerKey) return false;
+  if (job.reader !== "local" || job.status !== "queued") return false;
+  if (now.getTime() - new Date(job.createdAt).getTime() < config.localFallbackMs) return false;
+  const workerToken = randomToken();
+  const next: Job = { ...job, reader: "api", workerTokenHash: await sha256Hex(workerToken), updatedAt: now.toISOString() };
+  if (!(await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfMatch: entry.etag }))) return false;
+  await deps.jobs.delete(`queue/${job.id}`);
+  console.log("job: no local reader in time; using the owner's key", job.id);
+  try {
+    await deps.startWorker({ jobId: job.id, workerToken });
+  } catch (err) {
+    console.error("job: fallback worker did not start", job.id, err instanceof Error ? err.message : err);
+    await finishJob(deps, next, { status: "error", error: { code: "start_failed", message: "Could not start the conversion. Try again." } });
+  }
+  return true;
+}
+
 /** GET /api/jobs/:id?token=... */
 export async function handleJob(req: Request, id: string | undefined, deps: Deps): Promise<Response> {
   const token = new URL(req.url).searchParams.get("token") ?? "";
   if (!id) return fail(404, "not_found", "No such conversion.");
-  const entry = await deps.jobs.getJSON<Job>(`job/${id}`);
+  let entry = await deps.jobs.getJSON<Job>(`job/${id}`);
   if (!entry || entry.value.viewTokenHash !== (await sha256Hex(token))) {
     return fail(404, "not_found", "No such conversion.");
   }
+  const now = deps.now?.() ?? new Date();
+  if (await maybeFallBack(deps, entry, now)) entry = (await deps.jobs.getJSON<Job>(`job/${id}`)) ?? entry;
+
   let job = entry.value;
-  const age = (deps.now?.() ?? new Date()).getTime() - new Date(job.updatedAt).getTime();
-  if ((job.status === "queued" || job.status === "running") && age > STALE_MS) {
-    await finishJob(deps, job, { status: "error", error: { code: "timeout", message: "The conversion took too long. Try again." } });
+  const pending = job.status === "queued" || job.status === "running";
+  const local = (job.reader ?? "api") === "local";
+  const age = now.getTime() - new Date(local ? job.createdAt : job.updatedAt).getTime();
+  const limit = local ? deps.config.localTimeoutMs : STALE_MS;
+  if (pending && age > limit) {
+    const message = local
+      ? "No reader picked up this conversion in time. Try again later, or use your own API key."
+      : "The conversion took too long. Try again.";
+    await finishJob(deps, job, { status: "error", error: { code: "timeout", message } });
     job = (await deps.jobs.getJSON<Job>(`job/${id}`))?.value ?? job;
   }
-  return json(200, { id: job.id, status: job.status, result: job.result, error: job.error });
+  return json(200, { id: job.id, status: job.status, reader: job.reader ?? "api", result: job.result, error: job.error });
+}
+
+// ---- CLI reader endpoints (Authorization: Bearer PGN_WORKER_TOKEN) ----
+
+async function workerAuthorized(req: Request, config: AppConfig): Promise<boolean> {
+  if (!config.workerToken) return false;
+  const auth = req.headers.get("authorization") ?? "";
+  const given = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  // Compare digests so the comparison time does not depend on the token.
+  return (await sha256Hex(given)) === (await sha256Hex(config.workerToken));
+}
+
+function leaseLive(job: Job, now: Date): boolean {
+  return Boolean(job.lease && new Date(job.lease.until).getTime() > now.getTime());
+}
+
+/** GET /api/worker/jobs: jobs waiting for the CLI reader, oldest first. */
+export async function handleWorkerList(req: Request, deps: Deps): Promise<Response> {
+  if (!(await workerAuthorized(req, deps.config))) return fail(401, "unauthorized", "Bad or missing worker token.");
+  const now = deps.now?.() ?? new Date();
+  const jobs: { id: string; createdAt: string; imageCount: number; attempts: number }[] = [];
+  for (const key of await deps.jobs.list("queue/")) {
+    const id = key.slice("queue/".length);
+    const job = (await deps.jobs.getJSON<Job>(`job/${id}`))?.value;
+    if (!job || job.reader !== "local") continue;
+    const open = job.status === "queued" || (job.status === "running" && !leaseLive(job, now));
+    if (open) jobs.push({ id, createdAt: job.createdAt, imageCount: job.imageCount, attempts: job.attempts ?? 0 });
+  }
+  jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return json(200, { jobs });
+}
+
+/** POST /api/worker/jobs/:id/claim {workerId}: reserve a job and get its photos. */
+export async function handleWorkerClaim(req: Request, id: string | undefined, deps: Deps): Promise<Response> {
+  if (!(await workerAuthorized(req, deps.config))) return fail(401, "unauthorized", "Bad or missing worker token.");
+  const body = (await req.json().catch(() => ({}))) as { workerId?: unknown };
+  const workerId = typeof body.workerId === "string" ? body.workerId.slice(0, 80) : "cli";
+  const now = deps.now?.() ?? new Date();
+  const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
+  if (!entry || entry.value.reader !== "local") return fail(404, "not_found", "No such job in the queue.");
+  const job = entry.value;
+  const open = job.status === "queued" || (job.status === "running" && !leaseLive(job, now));
+  if (!open) return fail(409, "taken", "This job is already being read or is finished.");
+
+  const leaseToken = randomToken();
+  const lease = {
+    workerId,
+    until: new Date(now.getTime() + deps.config.leaseMs).toISOString(),
+    tokenHash: await sha256Hex(leaseToken),
+  };
+  const next: Job = { ...job, status: "running", lease, updatedAt: now.toISOString() };
+  if (!(await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfMatch: entry.etag }))) {
+    return fail(409, "taken", "Another reader claimed this job first.");
+  }
+  const images: ImageInput[] = [];
+  for (let n = 0; n < job.imageCount; n++) {
+    const img = await deps.jobs.getBytes(`img/${job.id}/${n}`);
+    if (!img) {
+      await finishJob(deps, next, { status: "error", error: { code: "internal", message: "The photo is missing." } });
+      return fail(410, "gone", "The photos for this job are missing.");
+    }
+    images.push({ mediaType: img.metadata.mediaType as ImageInput["mediaType"], data: encodeBase64(img.data) });
+  }
+  return json(200, {
+    jobId: job.id,
+    leaseToken,
+    leaseUntil: lease.until,
+    images,
+    systemPrompt: SYSTEM_PROMPT,
+    userText: userText(images.length),
+    schema: extractionJsonSchema(),
+  });
+}
+
+/**
+ * POST /api/worker/jobs/:id/result
+ *   {leaseToken, extraction}            the reading, checked against the schema
+ *   {leaseToken, error, retry?: true}    the read failed; retry puts it back in the queue
+ */
+export async function handleWorkerResult(req: Request, id: string | undefined, deps: Deps): Promise<Response> {
+  if (!(await workerAuthorized(req, deps.config))) return fail(401, "unauthorized", "Bad or missing worker token.");
+  const body = (await req.json().catch(() => null)) as {
+    leaseToken?: string;
+    extraction?: unknown;
+    error?: { message?: string };
+    retry?: boolean;
+    usage?: { model?: string; inputTokens?: number; outputTokens?: number };
+  } | null;
+  if (!body) return fail(400, "bad_request", "The request body is not JSON.");
+  const now = deps.now?.() ?? new Date();
+  const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
+  if (!entry || entry.value.reader !== "local") return fail(404, "not_found", "No such job.");
+  const job = entry.value;
+  if (job.status !== "running" || !job.lease || job.lease.tokenHash !== (await sha256Hex(body.leaseToken ?? ""))) {
+    return fail(409, "not_leased", "This job is not leased to you (it may have expired and been reclaimed).");
+  }
+
+  if (body.error) {
+    const attempts = (job.attempts ?? 0) + 1;
+    if (body.retry && attempts < MAX_LOCAL_ATTEMPTS) {
+      const back: Job = { ...job, status: "queued", lease: undefined, attempts, updatedAt: now.toISOString() };
+      if (!(await deps.jobs.setJSON(`job/${job.id}`, back, { onlyIfMatch: entry.etag }))) return fail(409, "conflict", "Try again.");
+      return json(200, { ok: true, requeued: true });
+    }
+    const message = String(body.error.message ?? "The reader could not read this photo.").slice(0, 300);
+    await finishJob(deps, job, { status: "error", error: { code: "reader_failed", message } });
+    return json(200, { ok: true, requeued: false });
+  }
+
+  const parsed = ExtractionSchema.safeParse(body.extraction);
+  if (!parsed.success) {
+    return fail(422, "invalid_extraction", "The reading does not match the schema.", {
+      issues: parsed.error.issues.slice(0, 10).map((i) => ({ path: i.path.join("."), message: i.message })),
+    });
+  }
+  const usage = {
+    model: String(body.usage?.model ?? "local"),
+    inputTokens: Number(body.usage?.inputTokens ?? 0),
+    outputTokens: Number(body.usage?.outputTokens ?? 0),
+  };
+  await finishJob(deps, job, { status: "done", result: parsed.data, usage, lease: undefined });
+  console.log("worker-api: done", job.id, job.lease.workerId, usage);
+  return json(200, { ok: true });
 }
 
 /** Delete usage counters for days and weeks that are over. */

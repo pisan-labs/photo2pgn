@@ -24,6 +24,33 @@ browser ──POST /api/convert──▶ convert (sync function)
 
 Netlify's synchronous functions stop at 60 seconds, and a careful read of a full sheet can take longer, so the Claude call runs in a background function. The browser keeps the job id, so a reload or a locked phone picks the wait back up.
 
+## Reading on your own machine (CLI reader)
+
+Free conversions can be read by Claude Code on your own computer, on your Claude subscription, instead of the API key:
+
+```
+browser ─▶ convert ─▶ job waits in the queue (Blobs)
+                         ▲            │
+cli/pgn-worker.mjs ──────┘ list, claim ▼ photos + prompt + schema
+   └─ claude -p (subscription) ─▶ reading ─▶ POST result ─▶ site checks it against the schema
+```
+
+Set on Netlify: `PGN_FREE_READER=local` (or `local-then-api`) and a long random `PGN_WORKER_TOKEN`. Then on your machine, logged in to Claude Code with your subscription:
+
+```sh
+export PGN_WORKER_TOKEN=...            # same value as on Netlify
+node cli/pgn-worker.mjs --site https://your-site --list    # what is waiting
+node cli/pgn-worker.mjs --site https://your-site --once    # read it all, then exit
+node cli/pgn-worker.mjs --site https://your-site           # keep watching (every 20 s)
+```
+
+- The CLI claims a job before reading it. The claim lasts 15 minutes (`PGN_LEASE_MINUTES`). If the CLI dies, the job goes back in the queue. Two machines can run the CLI at once.
+- `claude` runs with no tools at all, no hooks, plugins, MCP servers or CLAUDE.md (`--safe-mode`). The photos go in as image blocks, so text in a photo cannot make it run anything. It gets the site's own instructions and answer schema, so it reads sheets exactly as the API reader does.
+- It never bills per token. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from claude's environment, and the CLI stops if claude reports any API key in use (`--allow-api-key` overrides).
+- A failed reading is put back in the queue up to 3 times, then the visitor sees an error and the free conversion is given back.
+- With `local-then-api`, a job no reader claims within `PGN_LOCAL_FALLBACK_SECONDS` (default 120) is read with `PGN_OWNER_API_KEY` instead. With `local`, it waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30) and then fails with a refund.
+- To keep it running on a Mac, start it from a launchd agent or a `tmux` session. It keeps going through network blips and stops on setup problems (wrong token, missing `claude`).
+
 ## Who pays
 
 - **Free conversions** use the site owner's Anthropic key (`PGN_OWNER_API_KEY`), with caps per person per day and per week and a global daily cap as a spending backstop. A failed conversion is not counted.
@@ -39,7 +66,12 @@ Every name starts with `PGN_`, so keys and settings meant for other tools (`ANTH
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PGN_OWNER_API_KEY` | unset | Anthropic key for free conversions. Unset: only own-key conversions are offered. |
+| `PGN_OWNER_API_KEY` | unset | Anthropic key for free conversions. Unset: only own-key conversions are offered (unless a CLI reader is set up). |
+| `PGN_FREE_READER` | `api` | Who reads free conversions: `api` (owner key), `local` (CLI reader), `local-then-api`. |
+| `PGN_WORKER_TOKEN` | unset | Bearer token for the CLI reader endpoints. Unset: those endpoints are off. |
+| `PGN_LOCAL_FALLBACK_SECONDS` | `120` | `local-then-api`: wait this long for a CLI reader before using the owner key. |
+| `PGN_LOCAL_TIMEOUT_MINUTES` | `30` | `local`: a job no reader picks up fails after this long, with a refund. |
+| `PGN_LEASE_MINUTES` | `15` | How long a claimed job is reserved for one CLI reader. |
 | `PGN_FREE_PER_DAY` | `3` | Free conversions per person per UTC day. |
 | `PGN_FREE_PER_WEEK` | `10` | Free conversions per person per ISO week (Monday, UTC). |
 | `PGN_FREE_GLOBAL_PER_DAY` | `100` | All free conversions per UTC day. |
@@ -89,5 +121,6 @@ If `NODE_OPTIONS` contains `--use-openssl-ca`, clear it for `netlify dev` (its w
 | `src/components/` | Upload, review, board |
 | `netlify/lib/` | Handlers, caps, Claude call, Blobs store, settings |
 | `netlify/functions/` | Netlify entry points |
-| `dev/` | Local API for `vite`, mock Anthropic API |
+| `cli/pgn-worker.mjs` | CLI reader: reads queued photos with your local Claude Code |
+| `dev/` | Local API for `vite`, mock Anthropic API, fake `claude` for CLI tests |
 | `tests/` | Vitest |

@@ -10,8 +10,24 @@ export interface Limits {
   globalPerDay: number; // all free conversions per UTC day, a spending backstop
 }
 
+/**
+ * Who reads free conversions:
+ * - api: the owner's Anthropic key, right away (needs PGN_OWNER_API_KEY).
+ * - local: queued for the owner's CLI reader (cli/pgn-worker.mjs), which uses
+ *   a local Claude Code with a subscription.
+ * - local-then-api: queued for the CLI; if no reader claims it within
+ *   PGN_LOCAL_FALLBACK_SECONDS, the owner's key reads it.
+ * Own-key conversions always use the visitor's key right away.
+ */
+export type FreeReader = "api" | "local" | "local-then-api";
+
 export interface AppConfig {
   ownerKey: string | null;
+  freeReader: FreeReader;
+  workerToken: string | null; // bearer token for the CLI reader endpoints
+  localFallbackMs: number;
+  localTimeoutMs: number; // a queued local job fails after this long
+  leaseMs: number; // how long a claimed job is reserved for one CLI reader
   model: string;
   effort: Effort;
   limits: Limits;
@@ -27,11 +43,18 @@ function int(v: string | undefined, fallback: number): number {
 }
 
 const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+const READERS: FreeReader[] = ["api", "local", "local-then-api"];
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const effort = (env.PGN_CLAUDE_EFFORT ?? "high") as Effort;
+  const reader = (env.PGN_FREE_READER ?? "api") as FreeReader;
   return {
     ownerKey: env.PGN_OWNER_API_KEY?.trim() || null,
+    freeReader: READERS.includes(reader) ? reader : "api",
+    workerToken: env.PGN_WORKER_TOKEN?.trim() || null,
+    localFallbackMs: int(env.PGN_LOCAL_FALLBACK_SECONDS, 120) * 1000,
+    localTimeoutMs: int(env.PGN_LOCAL_TIMEOUT_MINUTES, 30) * 60_000,
+    leaseMs: int(env.PGN_LEASE_MINUTES, 15) * 60_000,
     model: env.PGN_CLAUDE_MODEL?.trim() || "claude-opus-5-5",
     effort: EFFORTS.includes(effort) ? effort : "high",
     limits: {

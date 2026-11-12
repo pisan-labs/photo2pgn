@@ -6,7 +6,7 @@ export const PlyReadingSchema = z.object({
   written: z
     .string()
     .describe(
-      "The move exactly as handwritten in the cell, in the sheet's own notation and language. Empty string if the cell is blank.",
+      "The move exactly as handwritten in the cell, in the sheet's own notation and language, with _ for each character you cannot make out (N_3, _xe5). Empty string if the cell is blank.",
     ),
   san: z
     .string()
@@ -16,7 +16,7 @@ export const PlyReadingSchema = z.object({
   alternatives: z
     .array(z.string())
     .describe(
-      "Other readings the handwriting supports, as English SAN, most likely first. At most 3. Empty if the move is clear.",
+      "Other readings the handwriting supports, as English SAN, most likely first. Up to 5 when the writing is hard to read. Empty if the move is clear.",
     ),
   legibility: z
     .enum(["clear", "unclear", "illegible"])

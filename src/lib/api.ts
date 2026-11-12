@@ -73,10 +73,16 @@ export async function startConversion(
 export async function waitForJob(
   jobId: string,
   viewToken: string,
-  opts: { signal?: AbortSignal; intervalMs?: number; timeoutMs?: number } = {},
+  opts: {
+    signal?: AbortSignal;
+    intervalMs?: number;
+    timeoutMs?: number;
+    onStatus?: (s: { status: string; reader: "api" | "local" }) => void;
+  } = {},
 ): Promise<Extraction> {
   const interval = opts.intervalMs ?? 2500;
-  const deadline = Date.now() + (opts.timeoutMs ?? 17 * 60 * 1000);
+  // Local-reader jobs can wait up to 30 minutes in the queue on the server.
+  const deadline = Date.now() + (opts.timeoutMs ?? 47 * 60 * 1000);
   let failures = 0;
   while (Date.now() < deadline) {
     if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
@@ -95,6 +101,7 @@ export async function waitForJob(
       if (++failures >= 5) throw new ApiError("network", "Lost contact with the server.");
       continue;
     }
+    opts.onStatus?.({ status: body.status, reader: body.reader ?? "api" });
     if (body.status === "done") return body.result as Extraction;
     if (body.status === "error") throw new ApiError(body.error?.code ?? "error", body.error?.message ?? "Failed.");
   }

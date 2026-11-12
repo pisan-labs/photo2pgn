@@ -7,7 +7,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadConfig } from "../netlify/lib/config";
 import { memoryKV } from "../netlify/lib/kv";
 import { readScoresheet } from "../netlify/lib/claude";
-import { handleConvert, handleJob, handleQuota, runWorker, type Deps } from "../netlify/lib/handlers";
+import {
+  handleConvert,
+  handleJob,
+  handleQuota,
+  handleWorkerClaim,
+  handleWorkerList,
+  handleWorkerResult,
+  runWorker,
+  type Deps,
+} from "../netlify/lib/handlers";
 import { DEMO_EXTRACTION } from "../src/demo/sample";
 
 async function toRequest(req: IncomingMessage): Promise<Request> {
@@ -27,6 +36,33 @@ async function send(res: ServerResponse, r: Response) {
   res.statusCode = r.status;
   r.headers.forEach((v, k) => res.setHeader(k, v));
   res.end(Buffer.from(await r.arrayBuffer()));
+}
+
+/** A Node request handler serving /api/* from the shared handlers. */
+export function apiListener(deps: Deps) {
+  return async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    const url = req.url ?? "";
+    if (!url.startsWith("/api/")) return next();
+    try {
+      const request = await toRequest(req);
+      const ip = req.socket.remoteAddress;
+      const path = new URL(request.url).pathname;
+      if (path === "/api/quota") return send(res, await handleQuota(request, ip, deps));
+      if (path === "/api/convert") return send(res, await handleConvert(request, ip, deps));
+      const m = /^\/api\/jobs\/([^/]+)$/.exec(path);
+      if (m) return send(res, await handleJob(request, decodeURIComponent(m[1]), deps));
+      if (path === "/api/worker/jobs") return send(res, await handleWorkerList(request, deps));
+      const w = /^\/api\/worker\/jobs\/([^/]+)\/(claim|result)$/.exec(path);
+      if (w && w[2] === "claim") return send(res, await handleWorkerClaim(request, decodeURIComponent(w[1]), deps));
+      if (w && w[2] === "result") return send(res, await handleWorkerResult(request, decodeURIComponent(w[1]), deps));
+      res.statusCode = 404;
+      res.end("not found");
+    } catch (err) {
+      console.error(err);
+      res.statusCode = 500;
+      res.end("dev api error");
+    }
+  };
 }
 
 export function devApi(): Plugin {
@@ -50,25 +86,7 @@ export function devApi(): Plugin {
     name: "photo2pgn-dev-api",
     apply: "serve",
     configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
-        const url = req.url ?? "";
-        if (!url.startsWith("/api/")) return next();
-        try {
-          const request = await toRequest(req);
-          const ip = req.socket.remoteAddress;
-          const path = new URL(request.url).pathname;
-          if (path === "/api/quota") return send(res, await handleQuota(request, ip, deps));
-          if (path === "/api/convert") return send(res, await handleConvert(request, ip, deps));
-          const m = /^\/api\/jobs\/([^/]+)$/.exec(path);
-          if (m) return send(res, await handleJob(request, decodeURIComponent(m[1]), deps));
-          res.statusCode = 404;
-          res.end("not found");
-        } catch (err) {
-          console.error(err);
-          res.statusCode = 500;
-          res.end("dev api error");
-        }
-      });
+      server.middlewares.use(apiListener(deps));
     },
   };
 }
