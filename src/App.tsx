@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UploadPanel, type Mode } from "./components/UploadPanel";
 import { ReviewPanel, type ReviewSession } from "./components/ReviewPanel";
 import { SignInPanel, useUser } from "./components/SignIn";
@@ -8,12 +8,16 @@ import { currentToken } from "./lib/auth";
 import { ApiError, type QueuedJob } from "./lib/api";
 import { describeError, followQueued, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
 import { load, remove, save } from "./lib/storage";
+import { Library, LocalRepository, type SavedGame } from "./lib/library";
+import { newId, SupabaseRepository } from "./lib/repository";
+import { getSupabase } from "./lib/supabase";
+import { LibraryPanel } from "./components/LibraryPanel";
 import { takeSharedPhotos } from "./lib/shared";
 import { useInstall } from "./lib/install";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
 import type { Extraction } from "./lib/schema";
 
-const SESSION_STORAGE = "photo2pgn.session";
+const LIBRARY_STORAGE = "photo2pgn.games";
 const PENDING_STORAGE = "photo2pgn.pending";
 const MAX_PAGES = 2;
 const FREE_READER = freeReaderFrom();
@@ -52,7 +56,21 @@ export default function App() {
   const [rememberKey, setRememberKey] = useState(() => Boolean(savedKey()));
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<ReviewSession | null>(null);
-  const [saved] = useState(() => load<ReviewSession>(SESSION_STORAGE));
+  const [savedTick, setSavedTick] = useState(0);
+  const library = useMemo(
+    () =>
+      new Library(
+        new LocalRepository<SavedGame>(LIBRARY_STORAGE),
+        user && signInAvailable ? new SupabaseRepository<SavedGame>(getSupabase(), "games", "updated_at") : null,
+      ),
+    [user, signInAvailable],
+  );
+  const saveGame = useCallback(
+    (g: SavedGame) => {
+      void library.save(g).then(() => setSavedTick((t) => t + 1));
+    },
+    [library],
+  );
   const abort = useRef<AbortController | null>(null);
   const [incoming, setIncoming] = useState<File[] | undefined>(undefined);
   const { canInstall, install, iosTip } = useInstall();
@@ -75,13 +93,9 @@ export default function App() {
     }
   }, [rememberKey, apiKey]);
 
-  useEffect(() => {
-    if (session) save(SESSION_STORAGE, { ...session, images: session.demo ? session.images : [] });
-  }, [session]);
-
   function finished(extraction: Extraction, images: string[]) {
     remove(PENDING_STORAGE);
-    setSession({ extraction, edits: {}, headers: extraction.headers, images, demo: false });
+    setSession({ id: newId(), extraction, edits: {}, headers: extraction.headers, images, demo: false });
     setView({ kind: "review" });
   }
 
@@ -105,7 +119,7 @@ export default function App() {
     followQueued(resume, { mode: "free", reader: "local", signal: ctrl.signal, onPhase })
       .then((ex) => {
         remove(PENDING_STORAGE);
-        setSession({ extraction: ex, edits: {}, headers: ex.headers, images: [], demo: false });
+        setSession({ id: newId(), extraction: ex, edits: {}, headers: ex.headers, images: [], demo: false });
         setView({ kind: "review" });
       })
       .catch((err) => {
@@ -142,13 +156,12 @@ export default function App() {
   }
 
   function demo() {
-    setSession({ extraction: DEMO_EXTRACTION, edits: {}, headers: DEMO_EXTRACTION.headers, images: [DEMO_IMAGE_URL], demo: true });
+    setSession({ id: "demo", extraction: DEMO_EXTRACTION, edits: {}, headers: DEMO_EXTRACTION.headers, images: [DEMO_IMAGE_URL], demo: true });
     setView({ kind: "review" });
   }
 
   function startOver() {
     setSession(null);
-    remove(SESSION_STORAGE);
     setPages([]);
     setError(null);
     setView({ kind: "upload" });
@@ -193,20 +206,6 @@ export default function App() {
                 Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like an app.
               </p>
             )}
-            {saved && !session && (
-              <p className="resume">
-                <button
-                  type="button"
-                  className="link"
-                  onClick={() => {
-                    setSession(saved);
-                    setView({ kind: "review" });
-                  }}
-                >
-                  Resume your last game ({saved.headers.white || "White"} vs {saved.headers.black || "Black"})
-                </button>
-              </p>
-            )}
             <UploadPanel
               pages={pages}
               setPages={setPages}
@@ -226,6 +225,16 @@ export default function App() {
               onDemo={demo}
               incoming={incoming}
             />
+            <LibraryPanel
+              library={library}
+              signedIn={Boolean(user)}
+              signInAvailable={signInAvailable}
+              refresh={savedTick}
+              onOpen={(g) => {
+                setSession({ id: g.id, extraction: g.game.extraction, edits: g.game.edits, headers: g.game.headers, notes: g.game.notes, images: [], demo: false });
+                setView({ kind: "review" });
+              }}
+            />
           </>
         )}
 
@@ -242,7 +251,9 @@ export default function App() {
           />
         )}
 
-        {view.kind === "review" && session && <ReviewPanel session={session} onChange={setSession} onStartOver={startOver} />}
+        {view.kind === "review" && session && (
+          <ReviewPanel session={session} onChange={setSession} onStartOver={startOver} onSave={saveGame} />
+        )}
       </main>
 
       <footer className="foot">

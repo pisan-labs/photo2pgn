@@ -4,13 +4,16 @@ Turn a photo of a handwritten chess tournament scoresheet into a PGN file, at **
 
 For players, coaches, arbiters and club volunteers who have a pile of paper scoresheets and want the games in a database, an engine or an online analysis board.
 
-1. Take or upload a photo of the sheet (one or two pages).
+1. Take a photo of the sheet with your phone (one or two pages), or upload one. Turn and crop it to the move table if needed.
 2. Claude reads every move, the players, event, date, round, ratings and the result.
 3. A chess engine replays the game, checks every move is legal, and repairs misreadings, even on sheets in awful handwriting (below).
-4. You review: corrected or guessed moves are amber, unclear ones blue, a move left to you red. Each move shows the board, what is on the sheet, and the legal moves to pick from.
-5. Download the `.pgn` file or copy the text.
+4. You review: corrected or guessed moves are amber, unclear ones blue, a move left to you red. Each move shows the board, what is on the sheet, and the legal moves to pick from. Fix a move by typing it, picking it, or tapping the piece and its square on the board; add a move the player forgot to write, or leave out one written by mistake. Add notes to the game.
+5. Download the `.pgn` file, copy it, email or share it, or open it in Lichess (one click) or Chess.com.
+6. Every game is kept in **My games**, on this device, and in your HintWise account when you are signed in, so a sheet photographed on a phone can be finished on a computer.
 
-The demo button runs the whole review on a sample game with no account and no key.
+The demo button runs the whole review on a sample game with no account and no key. A [free printable scoresheet](https://photo2pgn.hintwise.org/scoresheet.html) is laid out so it reads well.
+
+**On a phone** it works like an app: add it to the home screen (Install app on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it.
 
 ## Two ways to have it read
 
@@ -20,9 +23,10 @@ The demo button runs the whole review on a sample game with no account and no ke
 ## What is stored, and where
 
 - **Your photos** go from your browser to Claude to be read and are not kept. The one exception is the HintWise reader (below): there they wait on our server (Netlify) until they are read, then are deleted, at the latest after a day.
-- **Your games** stay in your browser. Nothing about them is stored on a server.
+- **Your games** (what was read, your corrections and notes, and the PGN, never the photos) are kept in this browser. When you are signed in they are also kept in your HintWise account, in Supabase (US East), where only you can see them. Delete a game from My games.
 - **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
-- **Delete my account:** sign in, open the account panel (top right), and choose "Delete my account". It deletes your account and your data in every HintWise app.
+- **Lichess:** "Open in Lichess" imports the game there, and imported games are public on Lichess. Nothing is sent to Lichess or Chess.com unless you press their button.
+- **Delete my account:** sign in, open the account panel (top right), and choose "Delete my account". It deletes your account and your data in every HintWise app, saved games included.
 
 ## An honest limitation
 
@@ -116,10 +120,14 @@ Tests never touch the network: the template modules take fakes, the CLI tests us
 | `src/lib/schema.ts`, `prompt.ts` | What Claude returns, and how it is asked (shared by the browser and the CLI reader) |
 | `src/lib/read.ts`, `reading.ts` | The reading: own key, gateway, or the queue with fallback; error messages |
 | `src/lib/notation.ts`, `repair.ts` | Cleaning handwritten moves; the search that repairs misreadings |
-| `src/lib/pgn.ts` | PGN export |
+| `src/lib/pgn.ts`, `export.ts` | PGN export; Lichess import, email, share sheet |
+| `src/lib/library.ts` | My games: this device, plus the HintWise account when signed in |
+| `src/lib/image.ts`, `shared.ts`, `install.ts` | Photo shrinking, turning and cropping; photos shared in from the gallery; installing the app |
+| `public/sw.js`, `public/manifest.webmanifest` | Installable app: offline shell and the Android share target |
+| `public/scoresheet.html` | The free printable scoresheet |
 | `src/lib/{supabase,auth,account,llm,signin-styles}.ts` | HintWise platform template: sign-in, account deletion, model calls |
 | `src/components/` | Upload, sign-in, review, board |
 | `netlify/lib/`, `netlify/functions/` | The HintWise reader queue |
 | `cli/pgn-worker.mjs` | The CLI reader |
-| `supabase/migrations/` | Registers the app with the gateway (stores nothing else) |
+| `supabase/migrations/` | 0001 registers the app with the gateway; 0002 adds `app_photo2pgn.games` (own rows only) |
 | `dev/`, `e2e/`, `tests/` | Dev API, fake `claude`; Playwright; vitest |

@@ -29,3 +29,9 @@
 2026-11-12 [decision] Owner yes to the platform rules: owner key only via the HintWise gateway, BYOK browser-direct, CLI reader kept for signed-in users with photos deleted once read.
 
 2026-11-12 [code] Reading moved to the browser (template llm.ts, record_scoresheet tool); server reduced to the CLI queue with Supabase sign-in check; template sign-in and account deletion; ESLint, coverage, Playwright.
+
+2026-11-12 [scope] Owner: integrate Notamate's features and make phone capture easy. Built: phone-first capture, turn/crop, installable app with share target, board editing, notes, exports, printable sheet, My games.
+
+2026-11-12 [decision] Lichess export uses its public import API (imported games are public); Chess.com has no public import, so the PGN is copied and its analysis board opened. UI translation deferred.
+
+2026-11-12 [code] Engine checked on two real sheets from the owner (transcribed): World Championship 2024 game 14 comes back exact; a club sheet with slips comes back legal with 2 entries flagged.

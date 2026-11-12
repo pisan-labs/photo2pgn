@@ -965,3 +965,35 @@ a.button {
   font-size: 0.95rem;
   margin: 16px 0 8px;
 }
+
+.library {
+  max-width: 720px;
+}
+
+.games {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+}
+
+.games li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.games .game-open {
+  font-weight: 600;
+  text-align: left;
+  padding-left: 0;
+}
+
+.games li .hint {
+  margin: 0;
+  flex: 1;
+}

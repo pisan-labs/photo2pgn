@@ -76,3 +76,32 @@ test("fits a phone screen", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+test("a read game is kept in My games and opens again; the demo is not saved", async ({ page }) => {
+  await fakeAnthropic(page, {});
+  await page.goto("/");
+  await page.getByRole("button", { name: "Try the demo game instead" }).click();
+  await page.getByRole("button", { name: "Start over" }).click();
+  await expect(page.getByRole("heading", { name: "My games" })).toHaveCount(0);
+
+  await page.setInputFiles('input[type=file][multiple]', "e2e/fixtures/scoresheet.png");
+  await page.getByLabel("API key", { exact: true }).fill("sk-ant-e2e-0123456789");
+  await page.getByRole("button", { name: "Read scoresheet" }).click();
+  await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
+  await page.locator(".notes textarea").fill("Round 3, board 2");
+  await page.waitForTimeout(1200); // autosave
+  await page.reload();
+
+  await expect(page.getByRole("heading", { name: "My games" })).toBeVisible();
+  await expect(page.getByText("Saved on this device only.")).toBeVisible();
+  await page.getByRole("button", { name: /^Morphy, Paul vs Duke Karl/ }).click();
+  await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
+  await expect(page.locator(".notes textarea")).toHaveValue("Round 3, board 2");
+  await expect(page.locator(".pgn textarea")).toHaveValue(/\{Round 3, board 2\} 1\. e4/);
+
+  await page.getByRole("button", { name: "Start over" }).click();
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: /^Delete Morphy/ }).click();
+  await expect(page.getByRole("heading", { name: "My games" })).toHaveCount(0);
+});
+

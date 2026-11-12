@@ -3,6 +3,7 @@ import type { Extraction, GameHeaders } from "../lib/schema";
 import { rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
 import { useAnalysis } from "../lib/useAnalysis";
 import { load, save } from "../lib/storage";
+import type { SavedGame } from "../lib/library";
 
 const FLIP_STORAGE = "photo2pgn.flipped";
 import { buildPgn, pgnFileName } from "../lib/pgn";
@@ -10,6 +11,7 @@ import { CHESSCOM_ANALYSIS, canShareFiles, gameTitle, importToLichess, mailtoHre
 import { Board, moveSquares } from "./Board";
 
 export interface ReviewSession {
+  id: string;
   extraction: Extraction;
   edits: Record<number, string>;
   headers: GameHeaders;
@@ -22,6 +24,8 @@ interface Props {
   session: ReviewSession;
   onChange: (s: ReviewSession) => void;
   onStartOver: () => void;
+  /** Called (debounced) with the game as it stands, to keep it in My games. */
+  onSave?: (game: SavedGame) => void;
 }
 
 const STATUS_LABEL: Record<PlyStatus, string> = {
@@ -80,14 +84,34 @@ function Review({
   session,
   onChange,
   onStartOver,
+  onSave,
   plies,
   analysis,
   busy,
 }: Props & { plies: ReturnType<typeof rowsToPlies>; analysis: Analysis; busy: boolean }) {
   const { extraction, edits, headers } = session;
+  const [commentFixes, setCommentFixes] = useState(false);
+  const pgn = useMemo(
+    () => buildPgn(headers, analysis, { commentFixes, notes: session.notes ?? "" }),
+    [headers, analysis, commentFixes, session.notes],
+  );
+
+  // Keep the game in My games as it is edited (not the demo).
+  useEffect(() => {
+    if (session.demo || busy || !onSave) return;
+    const t = setTimeout(() => {
+      onSave({
+        id: session.id,
+        title: gameTitle(headers),
+        pgn,
+        updated_at: new Date().toISOString(),
+        game: { headers, extraction, edits, notes: session.notes ?? "" },
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [pgn, session, headers, extraction, edits, busy, onSave]);
   const firstToCheck = analysis.plies.find((p) => p.status !== "ok")?.index ?? null;
   const [selected, setSelected] = useState<number | null>(firstToCheck ?? (plies.length ? 0 : null));
-  const [commentFixes, setCommentFixes] = useState(false);
   const [flipped, setFlipped] = useState(() => load<boolean>(FLIP_STORAGE) === true);
 
   const counts = useMemo(() => {
@@ -217,13 +241,7 @@ function Review({
         </section>
         <section className="panel" aria-labelledby="pgn-title">
           <h2 id="pgn-title">PGN</h2>
-          <PgnExport
-            headers={headers}
-            analysis={analysis}
-            notes={session.notes ?? ""}
-            commentFixes={commentFixes}
-            setCommentFixes={setCommentFixes}
-          />
+          <PgnExport headers={headers} analysis={analysis} pgn={pgn} commentFixes={commentFixes} setCommentFixes={setCommentFixes} />
         </section>
       </div>
     </div>
@@ -594,17 +612,16 @@ function HeadersForm({ headers, onChange }: { headers: GameHeaders; onChange: (h
 function PgnExport({
   headers,
   analysis,
-  notes,
+  pgn,
   commentFixes,
   setCommentFixes,
 }: {
   headers: GameHeaders;
   analysis: Analysis;
-  notes: string;
+  pgn: string;
   commentFixes: boolean;
   setCommentFixes: (v: boolean) => void;
 }) {
-  const pgn = useMemo(() => buildPgn(headers, analysis, { commentFixes, notes }), [headers, analysis, commentFixes, notes]);
   const [copied, setCopied] = useState(false);
   const fileName = pgnFileName(headers);
   const download = () => {
