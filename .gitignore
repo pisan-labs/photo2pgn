@@ -3,6 +3,9 @@ dist/
 .netlify/
 .env
 .env.*
+!.env.example
+!.env.asc
 *.log
 coverage/
 test-results/
+playwright-report/
