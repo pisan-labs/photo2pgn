@@ -6,8 +6,9 @@ import { DEMO_EXTRACTION } from "../src/demo/sample";
 
 // Only Chromium is installed: use the phones' screens, touch and user agents in it.
 function phone(name: string) {
-  const { defaultBrowserType: _engine, ...rest } = devices[name];
-  return rest;
+  const settings: Partial<(typeof devices)[string]> = { ...devices[name] };
+  delete settings.defaultBrowserType;
+  return settings;
 }
 
 const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
