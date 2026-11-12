@@ -49,3 +49,5 @@
 2026-11-12 [code] Cburnett SVG pieces (Commons, BSD-3, notice in src/assets/pieces and on the site); CLI reader effort defaults to medium (owner)
 
 2026-11-12 [decision] Owner: Chess TD hand-off (b) confirmed; per-person caps $0.25/day, $1.00/week (app caps unchanged), sent to Plabs to apply
+
+2026-11-12 [note] Plabs applied the caps (sql run 43297183571, 20:07 UTC): photo2pgn per person $0.25/day, $1.00/week; app $1/$5/$10; max_tokens 12000
