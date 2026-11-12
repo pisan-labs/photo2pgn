@@ -136,7 +136,6 @@ export default function App() {
             <small>Scoresheet photos to PGN files</small>
           </span>
         </a>
-        <span className="byline">HintWise</span>
       </header>
 
       <main>
@@ -198,7 +197,7 @@ export default function App() {
 
       <footer className="foot">
         <p>
-          Photos are deleted from the server once they are read. Results stay in your browser. A HintWise app.
+          Photos are deleted from the server once they are read. Results stay in your browser.
         </p>
       </footer>
     </div>

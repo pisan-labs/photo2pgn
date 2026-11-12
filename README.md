@@ -1,4 +1,4 @@
-# photo2png: Photo to PGN
+# photo2pgn: Photo to PGN
 
 Turn a photo of a handwritten chess tournament scoresheet into a PGN file.
 

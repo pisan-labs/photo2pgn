@@ -1,4 +1,4 @@
-# photo2png
+# photo2pgn
 
 Photo of a chess scoresheet to PGN. Vite + React front end, Netlify Functions (TypeScript) back end, Netlify Blobs for jobs and caps. Read BRIEFING.md first.
 

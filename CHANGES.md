@@ -19,3 +19,7 @@
 2026-11-12 [decision] Engine for awful handwriting: guesses with a natural-move prior, targeted backtracking (same piece, last 4 plies) even over clear moves, stop priced per unplayed ply, clustered fixes cost extra.
 
 2026-11-12 [code] repair.ts rewritten: matches readings against legal SANs (no chess.js per variant), lazy positions, _ wildcards, support counts; analysis in a Web Worker; PGN move numbers from the game.
+
+2026-11-12 [note] Platform instructions from the Plabs session: gateway for the owner key, BYOK browser-direct, Supabase sign-in, HintWise footer and favicon. Conflicts with server key, own caps and CLI photo queue sent to owner.
+
+2026-11-12 [code] HintWise footer embedded byte for byte in index.html (sha256 test), HintWise favicon, docs renamed photo2pgn after the repo rename.
