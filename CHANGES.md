@@ -47,3 +47,5 @@
 2026-11-12 [code] Chess TD hand-off (v1, owner chose B via Chess TD): link in with ref and pairing, game back by postMessage or URL hash; gateway max_tokens 12000 (owner via Plabs)
 
 2026-11-12 [code] Cburnett SVG pieces (Commons, BSD-3, notice in src/assets/pieces and on the site); CLI reader effort defaults to medium (owner)
+
+2026-11-12 [decision] Owner: Chess TD hand-off (b) confirmed; per-person caps $0.25/day, $1.00/week (app caps unchanged), sent to Plabs to apply
