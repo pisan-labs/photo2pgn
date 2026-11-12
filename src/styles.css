@@ -948,3 +948,20 @@ table.moves {
   font-size: 1rem;
   resize: vertical;
 }
+
+a.button {
+  display: inline-flex;
+  align-items: center;
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 8px 14px;
+  min-height: 40px;
+  text-decoration: none;
+}
+
+.send-title {
+  font-size: 0.95rem;
+  margin: 16px 0 8px;
+}

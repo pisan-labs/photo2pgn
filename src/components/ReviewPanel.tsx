@@ -6,6 +6,7 @@ import { load, save } from "../lib/storage";
 
 const FLIP_STORAGE = "photo2pgn.flipped";
 import { buildPgn, pgnFileName } from "../lib/pgn";
+import { CHESSCOM_ANALYSIS, canShareFiles, gameTitle, importToLichess, mailtoHref, pgnFile } from "../lib/export";
 import { Board, moveSquares } from "./Board";
 
 export interface ReviewSession {
@@ -621,9 +622,41 @@ function PgnExport({
       await navigator.clipboard.writeText(pgn);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+      return true;
     } catch {
-      // clipboard blocked; the text is selectable
+      return false; // clipboard blocked; the text is selectable
     }
+  };
+  const [shareable] = useState(() => canShareFiles());
+  const [sending, setSending] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const share = async () => {
+    try {
+      await navigator.share({ files: [pgnFile(pgn, fileName)], title: gameTitle(headers) });
+    } catch {
+      // cancelled, or the share sheet refused the file
+    }
+  };
+  const toLichess = async () => {
+    setSendError(null);
+    // Open the tab now, while the click still counts, then point it at the game.
+    const tab = window.open("about:blank", "_blank");
+    setSending("lichess");
+    try {
+      const url = await importToLichess(pgn);
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+    } catch (e) {
+      tab?.close();
+      setSendError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(null);
+    }
+  };
+  const toChessCom = async () => {
+    const ok = await copy();
+    setSendError(ok ? null : "Copy the PGN above first, then paste it on Chess.com.");
+    window.open(CHESSCOM_ANALYSIS, "_blank", "noopener");
   };
   const stop = analysis.stoppedAt !== null ? analysis.plies[analysis.stoppedAt] : null;
   return (
@@ -645,7 +678,34 @@ function PgnExport({
         <button type="button" className="secondary" onClick={copy}>
           {copied ? "Copied" : "Copy"}
         </button>
+        {shareable ? (
+          <button type="button" className="secondary" onClick={share}>
+            Share…
+          </button>
+        ) : (
+          <a className="button secondary" href={mailtoHref(pgn, headers)}>
+            Email
+          </a>
+        )}
       </div>
+      <h3 className="send-title">Analyse it</h3>
+      <div className="row">
+        <button type="button" className="secondary" onClick={toLichess} disabled={sending === "lichess"}>
+          {sending === "lichess" ? "Sending to Lichess…" : "Open in Lichess"}
+        </button>
+        <button type="button" className="secondary" onClick={toChessCom}>
+          Open in Chess.com
+        </button>
+      </div>
+      <p className="hint">
+        Lichess imports the game in one click; imported games are public there. For Chess.com the PGN is copied: paste it
+        into its analysis board.
+      </p>
+      {sendError && (
+        <p className="error" role="alert">
+          {sendError}
+        </p>
+      )}
     </div>
   );
 }
