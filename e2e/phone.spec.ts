@@ -40,8 +40,14 @@ test.describe("on a phone", () => {
     await editor.getByRole("button", { name: "Turn right" }).click();
     const img = editor.locator(".editor-frame img");
     await expect(img).toBeVisible();
+    // The turned preview loads a moment later: wait until the photo stands upright.
+    await expect
+      .poll(async () => {
+        const b = await img.boundingBox();
+        return Boolean(b && b.height > b.width);
+      })
+      .toBe(true);
     const box = (await img.boundingBox())!;
-    expect(box.height).toBeGreaterThan(box.width); // now upright
 
     // Drag the top-left handle inwards with a finger.
     const handle = editor.locator(".handle.nw");
