@@ -98,6 +98,9 @@ describe("settings", () => {
     expect(toml).toMatch(/from = "https:\/\/photo2pgn\.netlify\.app\/\*"\s+to = "https:\/\/photo2pgn\.hintwise\.org\/:splat"\s+status = 301\s+force = true/);
     expect(toml).toMatch(/for = "\/manifest\.webmanifest"\s+\[headers\.values\]\s+Content-Type = "application\/manifest\+json"/);
   });
+  it("keeps window.opener for the Chess TD hand-off (no same-origin opener policy)", () => {
+    expect(readFileSync("netlify.toml", "utf8")).not.toMatch(/Cross-Origin-Opener-Policy\s*=\s*"same-origin"/);
+  });
   it("reads PGN_ settings and falls back on bad numbers", () => {
     const c = loadConfig({ PGN_WORKER_TOKEN: " t ", PGN_READER_PER_DAY: "7", PGN_READER_PER_WEEK: "lots" });
     expect(c).toMatchObject({ workerToken: "t", limits: { perDay: 7, perWeek: 10, globalPerDay: 100 } });

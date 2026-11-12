@@ -1197,3 +1197,27 @@ a.button {
     border-radius: 0 0 8px 8px;
   }
 }
+
+/* Opened from Chess TD: whom the reading is for, and sending it back. */
+.handoff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  border-left: 4px solid var(--accent);
+}
+
+.handoff p {
+  margin: 0;
+}
+
+.send-back {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+}
+
+.send-back p {
+  margin: 0;
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Extraction, GameHeaders } from "../lib/schema";
 import { rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
 import { useAnalysis } from "../lib/useAnalysis";
@@ -9,6 +9,8 @@ const FLIP_STORAGE = "photo2pgn.flipped";
 import { buildPgn, pgnFileName } from "../lib/pgn";
 import { CHESSCOM_ANALYSIS, canShareFiles, gameTitle, importToLichess, mailtoHref, pgnFile } from "../lib/export";
 import { GameViewer, STATUS_LABEL } from "./GameViewer";
+import { SendToChessTd } from "./Handoff";
+import { resultMessage, type Handoff } from "../lib/handoff";
 import { START, boardView, plyLabel, stepTo } from "../lib/view";
 
 export interface ReviewSession {
@@ -27,6 +29,9 @@ interface Props {
   onStartOver: () => void;
   /** Called (debounced) with the game as it stands, to keep it in My games. */
   onSave?: (game: SavedGame) => void;
+  /** Opened from Chess TD: offer to send the checked game back. */
+  handoff?: Handoff | null;
+  onHandoffSent?: () => void;
 }
 
 export function ReviewPanel(props: Props) {
@@ -67,6 +72,8 @@ function Review({
   onChange,
   onStartOver,
   onSave,
+  handoff,
+  onHandoffSent,
   plies,
   analysis,
   busy,
@@ -79,19 +86,20 @@ function Review({
   );
 
   // Keep the game in My games as it is edited (not the demo).
+  const saveNow = useCallback(() => {
+    onSave?.({
+      id: session.id,
+      title: gameTitle(headers),
+      pgn,
+      updated_at: new Date().toISOString(),
+      game: { headers, extraction, edits, notes: session.notes ?? "" },
+    });
+  }, [onSave, session.id, session.notes, headers, pgn, extraction, edits]);
   useEffect(() => {
     if (session.demo || busy || !onSave) return;
-    const t = setTimeout(() => {
-      onSave({
-        id: session.id,
-        title: gameTitle(headers),
-        pgn,
-        updated_at: new Date().toISOString(),
-        game: { headers, extraction, edits, notes: session.notes ?? "" },
-      });
-    }, 800);
+    const t = setTimeout(saveNow, 800);
     return () => clearTimeout(t);
-  }, [pgn, session, headers, extraction, edits, busy, onSave]);
+  }, [saveNow, session.demo, busy, onSave]);
   const firstToCheck = analysis.plies.find((p) => p.status !== "ok")?.index ?? null;
   const [selected, setSelected] = useState<number>(firstToCheck ?? START);
   const [flipped, setFlipped] = useState(() => load<boolean>(FLIP_STORAGE) === true);
@@ -169,6 +177,15 @@ function Review({
           {session.demo && <p className="hint">This is the demo game: a sample, not read from a photo.</p>}
         </div>
         <div className="row">
+          {handoff && !busy && (
+            <SendToChessTd
+              handoff={handoff}
+              message={resultMessage(handoff, headers, analysis, pgn)}
+              incomplete={analysis.stoppedAt !== null}
+              beforeLeave={saveNow}
+              onSent={() => onHandoffSent?.()}
+            />
+          )}
           {firstToCheck !== null && (
             <button type="button" onClick={() => setSelected(nextToCheck(analysis, selected))}>
               Next to check

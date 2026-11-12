@@ -43,3 +43,5 @@
 2026-11-12 [note] 5 real sheets via CLI reader: Opus 5.5 exact on WCh g14 (116/116), all legal; Sonnet 5.5 73/116 there. ~90 output tok/move+~1k thinking; ≈$0.09-0.15/sheet at API prices
 
 2026-11-12 [code] Review is an analysis board: board left, moves right, start/back/forward/end buttons and keys, move notes below; walnut squares from chess-analyzer
+
+2026-11-12 [code] Chess TD hand-off (v1, owner chose B via Chess TD): link in with ref and pairing, game back by postMessage or URL hash; gateway max_tokens 12000 (owner via Plabs)

@@ -82,6 +82,19 @@ node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org           # keep w
 - Open question for the owner: whether serving public visitors through a personal Claude subscription fits that subscription's terms. Check them before relying on this path for public traffic.
 - To keep it running on a Mac, start it from a launchd agent or a `tmux` session. It keeps going through network blips and stops on setup problems (wrong token, missing `claude`).
 
+### Chess TD hand-off
+
+Chess TD (https://chesstd.hintwise.org) opens photo2pgn in a new tab to read one game:
+`/?from=chesstd&v=1&ref=<16-32 chars>&return=<Chess TD URL>&event=&round=&board=&white=&black=&date=YYYY-MM-DD`.
+A banner says whom the reading is for, Chess TD's pairing fills the game details, and once the game is checked
+"Send to Chess TD" returns `{type: "photo2pgn/result", v: 1, ref, pgn, white, black, result, warnings: [{ply, kind, text}]}`
+(`kind` is `filled`, `unsure`, `illegal` or `skipped`; `ply` counts half-moves of the PGN from 1):
+
+- by `postMessage` to the tab that opened it, to the return URL's origin only, waiting 3 s for `{type: "photo2pgn/received", ref}` from that origin;
+- otherwise by going to the return URL with `photo2pgn=<base64url(JSON)>` in its hash (never sent to a server), up to 16 KB.
+
+The return URL counts only on an allowed origin (`RETURN_ORIGINS` in `src/lib/handoff.ts`: Chess TD, and localhost 5173 and 4173 for development). The hand-off is kept in this browser for a day, so it survives signing in. Cancel sends `{type: "photo2pgn/cancel", ref}`. The site sends no `Cross-Origin-Opener-Policy`, which would cut `window.opener`.
+
 ### Settings
 
 Build (`netlify.toml`, all public):

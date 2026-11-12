@@ -11,8 +11,8 @@ import { SYSTEM_PROMPT, extractionJsonSchema, userText } from "./prompt";
 
 export const READ_TOOL_NAME = "record_scoresheet";
 
-/** Through the gateway: photo2pgn's limit there (owner, 12 Nov). */
-export const GATEWAY_MAX_TOKENS = 8000;
+/** Through the gateway: photo2pgn's limit there (owner, 12 Nov: raised from 8000, which cut games over ~75 moves). */
+export const GATEWAY_MAX_TOKENS = 12000;
 /** With the visitor's own key, straight to Anthropic. */
 export const BYOK_MAX_TOKENS = 16000;
 

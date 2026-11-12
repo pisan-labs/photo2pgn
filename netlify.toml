@@ -29,6 +29,8 @@
   [headers.values]
     Content-Type = "application/manifest+json"
 
+# No Cross-Origin-Opener-Policy: Chess TD opens this site in a tab and sends
+# the game back through window.opener, which "same-origin" would cut.
 [[headers]]
   for = "/*"
   [headers.values]

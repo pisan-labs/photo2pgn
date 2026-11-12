@@ -15,7 +15,9 @@ import { LibraryPanel } from "./components/LibraryPanel";
 import { takeSharedPhotos } from "./lib/shared";
 import { useInstall } from "./lib/install";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
-import type { Extraction } from "./lib/schema";
+import type { Extraction, GameHeaders } from "./lib/schema";
+import { HandoffBanner, useHandoff } from "./components/Handoff";
+import { applyHints } from "./lib/handoff";
 
 const LIBRARY_STORAGE = "photo2pgn.games";
 const PENDING_STORAGE = "photo2pgn.pending";
@@ -74,6 +76,10 @@ export default function App() {
   const abort = useRef<AbortController | null>(null);
   const [incoming, setIncoming] = useState<File[] | undefined>(undefined);
   const { canInstall, install, iosTip } = useInstall();
+  // Opened from Chess TD to read one game and send it back.
+  const { handoff, end: endHandoff } = useHandoff();
+  const [sentToChessTd, setSentToChessTd] = useState(false);
+  const hinted = (h: GameHeaders) => (handoff ? applyHints(h, handoff.hints) : h);
 
   // Photos shared from the phone's gallery (Android share sheet).
   useEffect(() => {
@@ -95,7 +101,7 @@ export default function App() {
 
   function finished(extraction: Extraction, images: string[]) {
     remove(PENDING_STORAGE);
-    setSession({ id: newId(), extraction, edits: {}, headers: extraction.headers, images, demo: false });
+    setSession({ id: newId(), extraction, edits: {}, headers: hinted(extraction.headers), images, demo: false });
     setView({ kind: "review" });
   }
 
@@ -119,7 +125,7 @@ export default function App() {
     followQueued(resume, { mode: "free", reader: "local", signal: ctrl.signal, onPhase })
       .then((ex) => {
         remove(PENDING_STORAGE);
-        setSession({ id: newId(), extraction: ex, edits: {}, headers: ex.headers, images: [], demo: false });
+        setSession({ id: newId(), extraction: ex, edits: {}, headers: handoff ? applyHints(ex.headers, handoff.hints) : ex.headers, images: [], demo: false });
         setView({ kind: "review" });
       })
       .catch((err) => {
@@ -127,7 +133,7 @@ export default function App() {
         remove(PENDING_STORAGE);
         if (!(err instanceof ApiError && err.code === "cancelled")) setError(describeError(err).message);
       });
-  }, [resume]);
+  }, [resume, handoff]);
 
   async function convert() {
     setError(null);
@@ -195,6 +201,14 @@ export default function App() {
       <SignInPanel open={signInOpen} onClose={() => setSignInOpen(false)} />
 
       <main>
+        {handoff && <HandoffBanner handoff={handoff} onCancel={endHandoff} />}
+        {sentToChessTd && (
+          <section className="panel handoff" role="status">
+            <p>
+              <strong>Sent to Chess TD.</strong> You can close this tab.
+            </p>
+          </section>
+        )}
         {view.kind === "upload" && (
           <>
             <p className="lede">
@@ -252,7 +266,17 @@ export default function App() {
         )}
 
         {view.kind === "review" && session && (
-          <ReviewPanel session={session} onChange={setSession} onStartOver={startOver} onSave={saveGame} />
+          <ReviewPanel
+            session={session}
+            onChange={setSession}
+            onStartOver={startOver}
+            onSave={saveGame}
+            handoff={session.demo ? null : handoff}
+            onHandoffSent={() => {
+              endHandoff();
+              setSentToChessTd(true);
+            }}
+          />
         )}
       </main>
 
