@@ -127,6 +127,9 @@ export function UploadPanel(p: Props) {
               </button>
             </div>
             <p className="hint desktop-only">or drop an image here</p>
+            <p className="hint">
+              No sheet yet? <a href="/scoresheet.html">Print a free scoresheet</a> that reads well.
+            </p>
           </div>
         )}
         {loading && <p className="hint">Preparing photo…</p>}
