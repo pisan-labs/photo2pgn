@@ -22,7 +22,7 @@ The demo button runs the whole review on a sample game with no account and no ke
 
 ## What is stored, and where
 
-- **Your photos** go from your browser to Claude to be read and are not kept. The one exception is the HintWise reader (below): there they wait on our server (Netlify) until they are read, then are deleted, at the latest after a day.
+- **Your photos** go from your browser to Claude to be read and are not kept, with one exception: for the free reading, when you are signed in, your photos can be kept on HintWise's server (Netlify Blobs) for up to a day and read by Claude Code on the HintWise owner's computer (the HintWise reader, below). They are deleted once read, and at the latest after a day. With your own API key, photos never go to HintWise's server.
 - **Your games** (what was read, your corrections and notes, and the PGN, never the photos) are kept in this browser. When you are signed in they are also kept in your HintWise account, in Supabase (US East), where only you can see them. Delete a game from My games.
 - **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
 - **Lichess:** "Open in Lichess" imports the game there, and imported games are public on Lichess. Nothing is sent to Lichess or Chess.com unless you press their button.
@@ -77,7 +77,8 @@ node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org           # keep w
 - `claude` runs with no tools at all and no hooks, plugins, MCP servers or CLAUDE.md (`--safe-mode`); the photos go in as image blocks, so text in a photo cannot make it run anything. It gets the site's own instructions and answer schema.
 - It never bills per token: `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from claude's environment, and the CLI stops if claude reports any API key in use (`--allow-api-key` overrides).
 - A failed reading goes back in the queue up to 3 times, then the visitor sees an error and the reading is not counted.
-- With `local-then-gateway`, the browser cancels a job no reader has claimed within `VITE_LOCAL_FALLBACK_SECONDS` (default 120) and reads it through the gateway instead. With `local`, a job waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30).
+- With `local-then-gateway`, the browser cancels a job no reader has claimed within `VITE_LOCAL_FALLBACK_SECONDS` (default 120) and reads it through the gateway instead; if the queue is off or unreachable it uses the gateway straight away. With `local`, a job waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30).
+- Open question for the owner: whether serving public visitors through a personal Claude subscription fits that subscription's terms. Check them before relying on this path for public traffic.
 - To keep it running on a Mac, start it from a launchd agent or a `tmux` session. It keeps going through network blips and stops on setup problems (wrong token, missing `claude`).
 
 ### Settings
@@ -87,7 +88,7 @@ Build (`netlify.toml`, all public):
 | Variable | Default | Meaning |
 |---|---|---|
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | HintWise's | Sign-in and the gateway (public by design) |
-| `VITE_FREE_READER` | `gateway` | `gateway`, `local` or `local-then-gateway` |
+| `VITE_FREE_READER` | `local-then-gateway` (owner, 12 Nov) | `gateway`, `local` or `local-then-gateway` |
 | `VITE_LOCAL_FALLBACK_SECONDS` | `120` | `local-then-gateway`: wait this long for the HintWise reader |
 
 Netlify Functions (only needed for the HintWise reader; every name starts with `PGN_`, so nothing meant for other tools is picked up):

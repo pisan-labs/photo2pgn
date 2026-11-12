@@ -11,8 +11,10 @@ import { SYSTEM_PROMPT, extractionJsonSchema, userText } from "./prompt";
 
 export const READ_TOOL_NAME = "record_scoresheet";
 
-/** Asked for; the gateway lowers it to the app's limit. */
-export const READ_MAX_TOKENS = 16000;
+/** Through the gateway: photo2pgn's limit there (owner, 12 Nov). */
+export const GATEWAY_MAX_TOKENS = 8000;
+/** With the visitor's own key, straight to Anthropic. */
+export const BYOK_MAX_TOKENS = 16000;
 
 export const TOOL_INSTRUCTION = `Record your transcription by calling the ${READ_TOOL_NAME} tool exactly once, with the whole game. Do not answer in text.`;
 
@@ -45,10 +47,10 @@ export interface ReadResult {
   model: string;
 }
 
-export function readRequest(photos: PhotoInput[]) {
+export function readRequest(photos: PhotoInput[], maxTokens = GATEWAY_MAX_TOKENS) {
   return {
     system: `${SYSTEM_PROMPT}\n\n${TOOL_INSTRUCTION}`,
-    max_tokens: READ_MAX_TOKENS,
+    max_tokens: maxTokens,
     tools: [readTool()],
     messages: [
       {
@@ -84,6 +86,6 @@ export function extractionFrom(message: Message): Extraction {
 
 /** One reading, in the mode and with the dependencies given (tests pass fakes). */
 export async function readScoresheet(photos: PhotoInput[], deps: AskDeps = {}): Promise<ReadResult> {
-  const message = await ask(readRequest(photos), deps);
+  const message = await ask(readRequest(photos, deps.mode === "byok" ? BYOK_MAX_TOKENS : GATEWAY_MAX_TOKENS), deps);
   return { extraction: extractionFrom(message), usage: message.usage, model: message.model };
 }

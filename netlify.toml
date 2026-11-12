@@ -10,7 +10,7 @@
   VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFya3R4bHJseWNlZmZ5b3pkd2hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODEwMTAsImV4cCI6MjA5MjQ1NzAxMH0.Vuku-irT3kAHZYibK23q6dpyOEqV_Eg5zB78I3dyshE"
   # Free readings: "gateway" (default), "local" (the owner's CLI reader) or
   # "local-then-gateway" (CLI first, gateway after VITE_LOCAL_FALLBACK_SECONDS).
-  VITE_FREE_READER = "gateway"
+  VITE_FREE_READER = "local-then-gateway"
   VITE_LOCAL_FALLBACK_SECONDS = "120"
 
 [functions]

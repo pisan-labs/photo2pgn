@@ -104,6 +104,36 @@ describe("readPhotos", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it("local-then-gateway: reads through the gateway at once when the queue is off or out of reach", async () => {
+    for (const code of ["reader_off", "network", "start_failed"]) {
+      const fetch = gatewayOk();
+      const ex = await readPhotos(photos, {
+        mode: "free",
+        reader: "local-then-gateway",
+        getToken: async () => "tok",
+        queue: async () => {
+          throw new ApiError(code, "queue unavailable");
+        },
+        ask: { fetch, gatewayUrl: "https://gw.test" },
+      });
+      expect(ex.rows).toHaveLength(17);
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("local: a queue that is off is an error; a used-up reader allowance is never bypassed", async () => {
+    const off = async () => {
+      throw new ApiError("reader_off", "The HintWise reader is not running.");
+    };
+    await expect(readPhotos(photos, { mode: "free", reader: "local", getToken: async () => "tok", queue: off })).rejects.toMatchObject({ code: "reader_off" });
+    const used = async () => {
+      throw new ApiError("limit_day", "Used up");
+    };
+    await expect(
+      readPhotos(photos, { mode: "free", reader: "local-then-gateway", getToken: async () => "tok", queue: used }),
+    ).rejects.toMatchObject({ code: "limit_day" });
+  });
+
   it("local-then-gateway: keeps waiting once the reader has the job", async () => {
     let t = 0;
     const cancel = vi.fn(async () => undefined);

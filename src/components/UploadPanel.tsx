@@ -70,7 +70,7 @@ export function UploadPanel(p: Props) {
   const freeNote =
     p.freeReader === "gateway"
       ? "Read with HintWise's key, within a daily and weekly allowance."
-      : "Read by the HintWise reader; it can take a few minutes when it is busy.";
+      : "Usually read by the HintWise reader: your photos wait on HintWise's server (Netlify Blobs) for up to a day and are read by Claude on the HintWise owner's computer, then deleted. If the reader is busy, HintWise's key reads them instead, within a daily allowance.";
 
   return (
     <section className="panel upload" aria-labelledby="upload-title">

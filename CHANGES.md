@@ -35,3 +35,5 @@
 2026-11-12 [decision] Lichess export uses its public import API (imported games are public); Chess.com has no public import, so the PGN is copied and its analysis board opened. UI translation deferred.
 
 2026-11-12 [code] Engine checked on two real sheets from the owner (transcribed): World Championship 2024 game 14 comes back exact; a club sheet with slips comes back legal with 2 entries flagged.
+
+2026-11-12 [decision] Owner via Plabs: gateway max_tokens 8000 (BYOK keeps 16000); CLI reader on as local-then-gateway; photo2pgn caps $0.10/person/day, $0.40/week, app $1/day. Queue off or unreachable now falls back to the gateway at once.

@@ -66,7 +66,17 @@ export async function readPhotos(photos: PhotoInput[], plan: ReadPlan): Promise<
   const token = getToken ? await getToken() : null;
   if (!token) throw new LlmUnavailable("Sign in to use the free reading.");
   phase("queued");
-  const job = await (plan.queue ?? queueForReader)(photos, token);
+  let job: QueuedJob;
+  try {
+    job = await (plan.queue ?? queueForReader)(photos, token);
+  } catch (err) {
+    // The reader's queue is off or out of reach: read through the gateway
+    // straight away rather than leave the visitor with an error. Its own
+    // allowance answers (limit_*) are passed on.
+    const fallBack = reader === "local-then-gateway" && err instanceof ApiError && !err.code.startsWith("limit_");
+    if (fallBack) return viaGateway();
+    throw err;
+  }
   plan.onQueued?.(job);
   return followQueued(job, { ...plan, reader, viaGateway });
 }

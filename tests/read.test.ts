@@ -84,6 +84,6 @@ describe("readScoresheet", () => {
     expect(err.scope).toBe("app-user-day");
     const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer session-token");
-    expect(JSON.parse(String(init.body))).toMatchObject({ app: "photo2pgn", max_tokens: 16000 });
+    expect(JSON.parse(String(init.body))).toMatchObject({ app: "photo2pgn", max_tokens: 8000 });
   });
 });
