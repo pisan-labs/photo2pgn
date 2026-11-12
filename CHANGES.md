@@ -39,3 +39,5 @@
 2026-11-12 [decision] Owner via Plabs: gateway max_tokens 8000 (BYOK keeps 16000); CLI reader on as local-then-gateway; photo2pgn caps $0.10/person/day, $0.40/week, app $1/day. Queue off or unreachable now falls back to the gateway at once.
 
 2026-11-12 [code] local-then-gateway asks the queue only while a CLI reader is running (heartbeat, PGN_READER_IDLE_SECONDS 60); else gateway at once. netlify.app→hintwise.org 301; manifest type
+
+2026-11-12 [note] 5 real sheets via CLI reader: Opus 5.5 exact on WCh g14 (116/116), all legal; Sonnet 5.5 73/116 there. ~90 output tok/move+~1k thinking; ≈$0.09-0.15/sheet at API prices
