@@ -32,7 +32,8 @@ Options:
   --list              Only list waiting jobs
   --interval SECONDS  How often to check when watching (default 20)
   --model NAME        Model for claude --model (default opus)
-  --effort LEVEL      low, medium, high, xhigh or max (default high)
+  --effort LEVEL      low, medium, high, xhigh or max (default medium: as
+                      accurate as high on the sample sheets, about 25% fewer tokens)
   --timeout SECONDS   Give up on one reading after this long (default 600)
   --claude PATH       The claude executable (default claude)
   --allow-api-key     Allow readings billed to an API key (default: refuse)
@@ -47,7 +48,7 @@ const { values: opt } = parseArgs({
     list: { type: "boolean", default: false },
     interval: { type: "string", default: "20" },
     model: { type: "string", default: "opus" },
-    effort: { type: "string", default: "high" },
+    effort: { type: "string", default: "medium" },
     timeout: { type: "string", default: "600" },
     claude: { type: "string", default: "claude" },
     "allow-api-key": { type: "boolean", default: false },

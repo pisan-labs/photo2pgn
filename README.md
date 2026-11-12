@@ -147,3 +147,5 @@ Tests never touch the network: the template modules take fakes, the CLI tests us
 | `cli/pgn-worker.mjs` | The CLI reader |
 | `supabase/migrations/` | 0001 registers the app with the gateway; 0002 adds `app_photo2pgn.games` (own rows only) |
 | `dev/`, `e2e/`, `tests/` | Dev API, fake `claude`; Playwright; vitest |
+
+The chess pieces are Cburnett's from Wikimedia Commons, used under the 3-clause BSD licence (`src/assets/pieces/LICENSE.txt`, served as `/piece-images-license.txt`). The board colours are chess-analyzer's "Walnut wood".

@@ -285,6 +285,9 @@ export default function App() {
           Your photos go from this browser to Claude to be read, and are not kept. With the HintWise reader they wait on
           our server until they are read, then are deleted. Your games stay in this browser.
         </p>
+        <p className="credits">
+          Chess pieces by Cburnett, <a href="/piece-images-license.txt">BSD licence</a>.
+        </p>
       </footer>
     </div>
   );

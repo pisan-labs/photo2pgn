@@ -1,14 +1,15 @@
 import { Chess, type Square } from "chess.js";
 import { useMemo, useState } from "react";
 
-// U+FE0E asks for the text glyph: some phones draw ♟ as an emoji otherwise.
-const GLYPH: Record<string, string> = { k: "♚\uFE0E", q: "♛\uFE0E", r: "♜\uFE0E", b: "♝\uFE0E", n: "♞\uFE0E", p: "♟\uFE0E" };
+// Cburnett's pieces from Wikimedia Commons, BSD licence (src/assets/pieces/LICENSE.txt).
+const PIECE_FILES = import.meta.glob<string>("../assets/pieces/*.svg", { eager: true, query: "?url", import: "default" });
+const pieceUrl = (color: "w" | "b", type: string) => PIECE_FILES[`../assets/pieces/${color}${type.toUpperCase()}.svg`];
 const FILES = "abcdefgh";
 const PROMOTIONS = [
-  ["q", "♛", "Queen"],
-  ["r", "♜", "Rook"],
-  ["b", "♝", "Bishop"],
-  ["n", "♞", "Knight"],
+  ["q", "Queen"],
+  ["r", "Rook"],
+  ["b", "Bishop"],
+  ["n", "Knight"],
 ] as const;
 
 interface Props {
@@ -75,7 +76,7 @@ export function Board({ fen, lastMove, caption, flipped = false, onMove }: Props
             const cls = `sq ${dark ? "dark" : "light"}${hl ? " hl" : ""}${from === sq ? " picked" : ""}${targets.has(sq) ? " target" : ""}`;
             const content = (
               <>
-                {cell && <span className={`pc ${cell.color === "w" ? "white" : "black"}`}>{GLYPH[cell.type]}</span>}
+                {cell && <img className="pc" src={pieceUrl(cell.color, cell.type)} alt="" draggable={false} />}
                 {fi === 7 && <span className="coord rank">{8 - r}</span>}
                 {ri === 7 && <span className="coord file">{FILES[f]}</span>}
               </>
@@ -94,7 +95,7 @@ export function Board({ fen, lastMove, caption, flipped = false, onMove }: Props
       </div>
       {promo && onMove && (
         <div className="row promo" role="group" aria-label="Promote to">
-          {PROMOTIONS.map(([p, glyph, name]) => (
+          {PROMOTIONS.map(([p, name]) => (
             <button
               key={p}
               type="button"
@@ -106,7 +107,7 @@ export function Board({ fen, lastMove, caption, flipped = false, onMove }: Props
                 if (san) onMove(san);
               }}
             >
-              {glyph}
+              <img className="promo-pc" src={pieceUrl(chess.turn(), p)} alt="" draggable={false} />
             </button>
           ))}
         </div>
