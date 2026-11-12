@@ -160,13 +160,10 @@ describe("readPhotos", () => {
 });
 
 describe("messages", () => {
-  it("says which cap, when it resets, and offers the visitor's own key", () => {
+  it("says the credits are out, until when, and offers the visitor's own key", () => {
     const at = "2026-11-13T08:00:00Z";
-    expect(capMessage(new CapReached("app-user-day", at), "en-US")).toMatch(/^Your daily photo2pgn allowance is used up\. It resets .+\. You can use your own/);
-    expect(capMessage(new CapReached("app-user-week", at))).toContain("weekly photo2pgn");
-    expect(capMessage(new CapReached("user-day", at))).toContain("daily HintWise");
-    expect(capMessage(new CapReached("app-month", at))).toContain("shared allowance");
-    expect(capMessage(new CapReached("app-day", "not a date"))).not.toContain("resets");
+    expect(capMessage(new CapReached("app-user-day", at), "en-US")).toMatch(/^Out of credits until .+\. Use your own Anthropic API key to keep going\.$/);
+    expect(capMessage(new CapReached("app-month", "not a date"))).toBe("Out of credits. Use your own Anthropic API key to keep going.");
     expect(describeError(new CapReached("app-day", at)).ownKey).toBe(true);
   });
   it("describes the other failures", () => {

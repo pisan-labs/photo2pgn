@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { UploadPanel, type Mode } from "./components/UploadPanel";
+import { UploadPanel } from "./components/UploadPanel";
+import { OUT_OF_CREDITS_STORAGE, outOfCreditsFrom, stillOut, type AccessOption, type OutOfCredits } from "./lib/access";
 import { ReviewPanel, type ReviewSession } from "./components/ReviewPanel";
 import { SignInPanel, useUser } from "./components/SignIn";
 import { fitPhotos, type PreparedImage } from "./lib/image";
@@ -53,7 +54,16 @@ export default function App() {
     resume ? { kind: "reading", startedAt: resume.startedAt, phase: "queued" } : { kind: "upload" },
   );
   const [pages, setPages] = useState<PreparedImage[]>([]);
-  const [mode, setMode] = useState<Mode>(() => (signInAvailable && !savedKey() ? "free" : "own-key"));
+  const [choice, setChoice] = useState<AccessOption>(() => (signInAvailable && !savedKey() ? "sign-in" : "own-key"));
+  // Out of credits: remembered per person until the reset, when it lapses by itself.
+  const [outMark, setOutMark] = useState<OutOfCredits | null>(() => load<OutOfCredits>(OUT_OF_CREDITS_STORAGE));
+  const [, setClock] = useState(0);
+  const out = stillOut(outMark, user?.id ?? null);
+  useEffect(() => {
+    if (!out) return;
+    const t = setTimeout(() => setClock((c) => c + 1), Math.max(1000, Date.parse(out.until) - Date.now() + 1000));
+    return () => clearTimeout(t);
+  }, [out]);
   const [apiKey, setApiKey] = useState(savedKey);
   const [rememberKey, setRememberKey] = useState(() => Boolean(savedKey()));
   const [error, setError] = useState<string | null>(null);
@@ -109,8 +119,16 @@ export default function App() {
     setView({ kind: "upload" });
     if (err instanceof ApiError && err.code === "cancelled") return;
     remove(PENDING_STORAGE);
+    const mark = user ? outOfCreditsFrom(err, user.id) : null;
+    if (mark) {
+      // The notice above the choices says until when; only the own key is offered meanwhile.
+      save(OUT_OF_CREDITS_STORAGE, mark);
+      setOutMark(mark);
+      setChoice("own-key");
+      return;
+    }
     const { message, ownKey } = describeError(err);
-    if (ownKey) setMode("own-key");
+    if (ownKey) setChoice("own-key");
     setError(message);
   }
 
@@ -146,7 +164,7 @@ export default function App() {
       const extraction = await readPhotos(
         photos.map((p) => ({ mediaType: p.mediaType, data: p.data })),
         {
-          mode,
+          mode: choice === "sign-in" ? "free" : "own-key",
           apiKey: apiKey.trim(),
           reader: FREE_READER,
           signal: ctrl.signal,
@@ -198,7 +216,7 @@ export default function App() {
           )}
         </span>
       </header>
-      <SignInPanel open={signInOpen} onClose={() => setSignInOpen(false)} />
+      <SignInPanel open={signInOpen} signedIn={Boolean(user)} onClose={() => setSignInOpen(false)} />
 
       <main>
         {handoff && <HandoffBanner handoff={handoff} onCancel={endHandoff} />}
@@ -217,7 +235,7 @@ export default function App() {
             </p>
             {iosTip && (
               <p className="install-tip">
-                Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like an app.
+                Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like a native mobile app.
               </p>
             )}
             <UploadPanel
@@ -226,10 +244,11 @@ export default function App() {
               maxPages={MAX_PAGES}
               signInAvailable={signInAvailable}
               signedIn={Boolean(user)}
+              userEmail={user?.email ?? null}
               onOpenSignIn={() => setSignInOpen(true)}
-              freeReader={FREE_READER}
-              mode={mode}
-              setMode={setMode}
+              out={out}
+              choice={choice}
+              setChoice={setChoice}
               apiKey={apiKey}
               setApiKey={setApiKey}
               rememberKey={rememberKey}
@@ -281,10 +300,7 @@ export default function App() {
       </main>
 
       <footer className="foot">
-        <p>
-          Your photos go from this browser to Claude to be read, and are not kept. With the HintWise reader they wait on
-          our server until they are read, then are deleted. Your games stay in this browser.
-        </p>
+        <p>HintWise uses your photos only to read the game and does not keep them afterwards. Your games stay on this device, and in your account when you sign in.</p>
         <p className="credits">
           Chess pieces by Cburnett, <a href="/piece-images-license.txt">BSD licence</a>.
         </p>

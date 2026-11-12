@@ -36,11 +36,17 @@ test("photo to PGN with the visitor's own key", async ({ page }) => {
   const seen: { body?: Record<string, unknown>; key?: string } = {};
   await fakeAnthropic(page, seen);
   await page.goto("/");
-  await expect(page.getByText("Not available in this preview")).toBeVisible();
+  // No sign-in in this preview: the own key is the one way in, and the photo step waits for it.
+  await expect(page.getByRole("heading", { name: "1. Your Anthropic API key" })).toBeVisible();
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await expect(page.getByText("Enter your API key first")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Take photo/ })).toBeDisabled();
+  await expect(page.getByText(/scoresheet that reads well|Print a free scoresheet/)).toHaveCount(0);
+  await page.getByLabel("API key", { exact: true }).fill("sk-ant-e2e-0123456789");
+  await expect(page.getByRole("button", { name: /Take photo/ })).toBeEnabled();
 
   await page.setInputFiles('input[type=file][multiple]', "e2e/fixtures/scoresheet.png");
   await expect(page.getByText("Page 1")).toBeVisible();
-  await page.getByLabel("API key", { exact: true }).fill("sk-ant-e2e-0123456789");
   await page.getByRole("button", { name: "Read scoresheet" }).click();
 
   await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
@@ -84,8 +90,8 @@ test("a read game is kept in My games and opens again; the demo is not saved", a
   await page.getByRole("button", { name: "Start over" }).click();
   await expect(page.getByRole("heading", { name: "My games" })).toHaveCount(0);
 
-  await page.setInputFiles('input[type=file][multiple]', "e2e/fixtures/scoresheet.png");
   await page.getByLabel("API key", { exact: true }).fill("sk-ant-e2e-0123456789");
+  await page.setInputFiles('input[type=file][multiple]', "e2e/fixtures/scoresheet.png");
   await page.getByRole("button", { name: "Read scoresheet" }).click();
   await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
   await page.locator(".notes textarea").fill("Round 3, board 2");

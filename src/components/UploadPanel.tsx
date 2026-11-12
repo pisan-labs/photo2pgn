@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { prepareImage, type PreparedImage } from "../lib/image";
 import { PhotoEditor } from "./PhotoEditor";
-import type { FreeReader } from "../lib/reading";
-
-export type Mode = "free" | "own-key";
+import { accessOptions, outMessage, readyToRead, type AccessOption, type OutOfCredits } from "../lib/access";
 
 interface Props {
   pages: PreparedImage[];
@@ -11,10 +9,12 @@ interface Props {
   maxPages: number;
   signInAvailable: boolean;
   signedIn: boolean;
+  userEmail?: string | null;
   onOpenSignIn: () => void;
-  freeReader: FreeReader;
-  mode: Mode;
-  setMode: (m: Mode) => void;
+  /** Signed in, and this person's credits are used up until then. */
+  out: OutOfCredits | null;
+  choice: AccessOption;
+  setChoice: (c: AccessOption) => void;
   apiKey: string;
   setApiKey: (k: string) => void;
   rememberKey: boolean;
@@ -56,36 +56,86 @@ export function UploadPanel(p: Props) {
     }
   }
 
+  const options = accessOptions({ signInAvailable: p.signInAvailable, out: Boolean(p.out) });
+  const choice: AccessOption = options.includes(p.choice) ? p.choice : options[0];
+  const ready = readyToRead({ choice, signedIn: p.signedIn, out: Boolean(p.out), apiKey: p.apiKey });
+  const canConvert = ready && p.pages.length > 0 && !loading;
+
+  // Photos shared in from the gallery wait until there is a way to read them.
   useEffect(() => {
-    if (p.incoming?.length && !took.current) {
+    if (ready && p.incoming?.length && !took.current) {
       took.current = true;
       void addFiles(p.incoming);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.incoming]);
-
-  const keyValid = /^sk-ant-\S{10,}$/.test(p.apiKey.trim());
-  const freeReady = p.signInAvailable && p.signedIn;
-  const canConvert = p.pages.length > 0 && !loading && (p.mode === "free" ? freeReady : keyValid);
-  const freeNote =
-    p.freeReader === "gateway"
-      ? "Read with HintWise's key, within a daily and weekly allowance."
-      : "Usually read by the HintWise reader: your photos wait on HintWise's server (Netlify Blobs) for up to a day and are read by Claude on the HintWise owner's computer, then deleted. If the reader is busy, HintWise's key reads them instead, within a daily allowance.";
+  }, [p.incoming, ready]);
 
   return (
-    <section className="panel upload" aria-labelledby="upload-title">
-      <h2 id="upload-title">1. Photograph the scoresheet</h2>
+    <section className="panel upload" aria-labelledby="access-title">
+      <h2 id="access-title">{options.length > 1 ? "1. Sign in, or use your own key" : "1. Your Anthropic API key"}</h2>
+      {p.out && <p className="notice">{outMessage(p.out)}</p>}
+      {options.length > 1 && (
+        <div className="choices" role="radiogroup" aria-label="How Claude reads it">
+          <label className={`choice${choice === "sign-in" ? " selected" : ""}`}>
+            <input type="radio" name="access" checked={choice === "sign-in"} onChange={() => p.setChoice("sign-in")} />
+            <span>
+              <strong>Sign in</strong>
+              <small>{p.signedIn ? `Signed in${p.userEmail ? ` as ${p.userEmail}` : ""}.` : "With Google or an email link."}</small>
+              {!p.signedIn && choice === "sign-in" && (
+                <button type="button" className="small" onClick={p.onOpenSignIn}>
+                  Sign in
+                </button>
+              )}
+            </span>
+          </label>
+          <label className={`choice${choice === "own-key" ? " selected" : ""}`}>
+            <input type="radio" name="access" checked={choice === "own-key"} onChange={() => p.setChoice("own-key")} />
+            <span>
+              <strong>Use my own API key</strong>
+              <small>Your Anthropic key, a few cents a sheet.</small>
+            </span>
+          </label>
+        </div>
+      )}
+      {choice === "own-key" && (
+        <div className="key">
+          <label htmlFor="api-key">API key</label>
+          <input
+            id="api-key"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="sk-ant-…"
+            value={p.apiKey}
+            onChange={(e) => p.setApiKey(e.target.value)}
+          />
+          <label className="inline">
+            <input type="checkbox" checked={p.rememberKey} onChange={(e) => p.setRememberKey(e.target.checked)} />
+            Remember on this device
+          </label>
+          <p className="hint">
+            It goes only from this browser to Anthropic. Get one at{" "}
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
+              console.anthropic.com
+            </a>
+            .
+          </p>
+        </div>
+      )}
+
+      <h2 id="upload-title">2. Photograph the scoresheet</h2>
       <div
-        className={`dropzone${dragging ? " dragging" : ""}`}
+        className={`dropzone${dragging ? " dragging" : ""}${ready ? "" : " disabled"}`}
+        aria-disabled={!ready}
         onDragOver={(e) => {
           e.preventDefault();
-          setDragging(true);
+          if (ready) setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          void addFiles(e.dataTransfer.files);
+          if (ready) void addFiles(e.dataTransfer.files);
         }}
       >
         {p.pages.length > 0 && (
@@ -114,22 +164,23 @@ export function UploadPanel(p: Props) {
         {p.pages.length < p.maxPages && (
           <div className="pick">
             <p>
-              {p.pages.length === 0
-                ? "Flat, in good light, the whole move table in the frame."
-                : "Game continues on another page? Add it."}
+              {!ready
+                ? choice === "sign-in"
+                  ? "Sign in first, then take the photo."
+                  : "Enter your API key first, then take the photo."
+                : p.pages.length === 0
+                  ? "Flat, in good light, the whole move table in the frame."
+                  : "Game continues on another page? Add it."}
             </p>
             <div className="row capture">
-              <button type="button" className="camera" onClick={() => cameraRef.current?.click()} disabled={loading}>
+              <button type="button" className="camera" onClick={() => cameraRef.current?.click()} disabled={loading || !ready}>
                 <span aria-hidden="true">📷</span> Take photo
               </button>
-              <button type="button" className="secondary" onClick={() => fileRef.current?.click()} disabled={loading}>
+              <button type="button" className="secondary" onClick={() => fileRef.current?.click()} disabled={loading || !ready}>
                 Choose a photo
               </button>
             </div>
-            <p className="hint desktop-only">or drop an image here</p>
-            <p className="hint">
-              No sheet yet? <a href="/scoresheet.html">Print a free scoresheet</a> that reads well.
-            </p>
+            {ready && <p className="hint desktop-only">or drop an image here</p>}
           </div>
         )}
         {loading && <p className="hint">Preparing photo…</p>}
@@ -139,6 +190,7 @@ export function UploadPanel(p: Props) {
           accept="image/*"
           capture="environment"
           hidden
+          disabled={!ready}
           onChange={(e) => {
             void addFiles(e.target.files);
             e.target.value = "";
@@ -150,6 +202,7 @@ export function UploadPanel(p: Props) {
           accept="image/*,.heic,.heif"
           multiple
           hidden
+          disabled={!ready}
           onChange={(e) => {
             void addFiles(e.target.files);
             e.target.value = "";
@@ -166,60 +219,6 @@ export function UploadPanel(p: Props) {
             setEditing(null);
           }}
         />
-      )}
-
-      <h2>2. Choose how it is read</h2>
-      <div className="choices" role="radiogroup" aria-label="How it is read">
-        <label className={`choice${p.mode === "free" ? " selected" : ""}${p.signInAvailable ? "" : " disabled"}`}>
-          <input
-            type="radio"
-            name="mode"
-            checked={p.mode === "free"}
-            disabled={!p.signInAvailable}
-            onChange={() => p.setMode("free")}
-          />
-          <span>
-            <strong>Free, with a HintWise account</strong>
-            {p.signInAvailable ? <small>{freeNote}</small> : <small>Not available in this preview. Use your own key.</small>}
-            {p.signInAvailable && !p.signedIn && p.mode === "free" && (
-              <button type="button" className="small" onClick={p.onOpenSignIn}>
-                Sign in
-              </button>
-            )}
-          </span>
-        </label>
-        <label className={`choice${p.mode === "own-key" ? " selected" : ""}`}>
-          <input type="radio" name="mode" checked={p.mode === "own-key"} onChange={() => p.setMode("own-key")} />
-          <span>
-            <strong>My own Anthropic API key</strong>
-            <small>No account and no allowance; Anthropic bills your account, a few cents a sheet.</small>
-          </span>
-        </label>
-      </div>
-      {p.mode === "own-key" && (
-        <div className="key">
-          <label htmlFor="api-key">API key</label>
-          <input
-            id="api-key"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="sk-ant-…"
-            value={p.apiKey}
-            onChange={(e) => p.setApiKey(e.target.value)}
-          />
-          <label className="inline">
-            <input type="checkbox" checked={p.rememberKey} onChange={(e) => p.setRememberKey(e.target.checked)} />
-            Remember on this device
-          </label>
-          <p className="hint">
-            Your key goes only from this browser to Anthropic; HintWise never sees it. Get one at{" "}
-            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
-              console.anthropic.com
-            </a>
-            .
-          </p>
-        </div>
       )}
 
       {p.error && (

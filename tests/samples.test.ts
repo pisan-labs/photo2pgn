@@ -4,7 +4,9 @@ import { analyzeGame, rowsToPlies } from "../src/lib/repair";
 import { rowsFrom } from "./helpers";
 import { CHESSCOM_SHEET, DING_GUKESH_14 } from "./samples/sheets";
 
-describe("real sheets", () => {
+// These check what the engine finds, not how fast (tests/repair.test.ts times it): the club
+// sheet takes about 2 s plain and can pass 5 s under coverage on a busy machine.
+describe("real sheets", { timeout: 20_000 }, () => {
   it("World Championship 2024 game 14, captures written without x: the exact game, nothing flagged", () => {
     const a = analyzeGame(rowsToPlies(rowsFrom(DING_GUKESH_14.written)));
     expect(a.stoppedAt).toBeNull();

@@ -48,8 +48,8 @@ async function readAndCheck(page: Page) {
   await expect(page.getByText("For Chess TD: Morphy, Paul – Allies, round 3, board 5.")).toBeVisible();
   // The parameters leave the address bar once picked up.
   await expect.poll(() => new URL(page.url()).search).toBe("");
-  await page.setInputFiles("input[type=file][multiple]", "e2e/fixtures/scoresheet.png");
   await page.getByLabel("API key", { exact: true }).fill("sk-ant-e2e-0123456789");
+  await page.setInputFiles("input[type=file][multiple]", "e2e/fixtures/scoresheet.png");
   await page.getByRole("button", { name: "Read scoresheet" }).click();
   await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
   // Chess TD's pairing wins over the handwriting.

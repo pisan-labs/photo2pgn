@@ -11,18 +11,22 @@ For players, coaches, arbiters and club volunteers who have a pile of paper scor
 5. Download the `.pgn` file, copy it, email or share it, or open it in Lichess (one click) or Chess.com.
 6. Every game is kept in **My games**, on this device, and in your HintWise account when you are signed in, so a sheet photographed on a phone can be finished on a computer.
 
-The demo button runs the whole review on a sample game with no account and no key. A [free printable scoresheet](https://photo2pgn.hintwise.org/scoresheet.html) is laid out so it reads well.
+The demo button runs the whole review on a sample game with no account and no key.
 
-**On a phone** it works like an app: add it to the home screen (Install app on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it.
+**On a phone** it works like a native mobile app: add it to the home screen (Install app on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it.
 
-## Two ways to have it read
+## Sign in, or use your own key
 
-- **Free, with a HintWise account** (Google, or a sign-in link by email). It reads with HintWise's key through the HintWise gateway, within a daily and weekly allowance. When the allowance is used up, the page says which one and when it resets, and offers the next option.
-- **Your own Anthropic API key.** No account and no allowance. The key goes only from your browser to Anthropic; HintWise never sees it. Tick "Remember on this device" to keep it in this browser.
+The page offers two ways in, and the photo step opens once one is set up:
+
+- **Sign in** (Google, or a sign-in link by email). Claude reads with HintWise's key through the HintWise gateway, within the person's credits. When they run out, the page says until when and offers only the next option.
+- **Your own Anthropic API key.** No account. The key goes only from your browser to Anthropic; HintWise never sees it. Tick "Remember on this device" to keep it in this browser.
+
+Buying credits would be a third way in, offered to a person who is out (`src/lib/access.ts`).
 
 ## What is stored, and where
 
-- **Your photos** go from your browser to Claude to be read and are not kept, with one exception: for the free reading, when you are signed in, your photos can be kept on HintWise's server (Netlify Blobs) for up to a day and read by Claude Code on the HintWise owner's computer (the HintWise reader, below). They are deleted once read, and at the latest after a day. With your own API key, photos never go to HintWise's server.
+- **Your photos** go from your browser to Claude to be read and are not kept, with one exception: when you are signed in, your photos can be kept on HintWise's server (Netlify Blobs) for up to a day and read by Claude Code on the HintWise owner's computer (the HintWise reader, below). They are deleted once read, and at the latest after a day. With your own API key, photos never go to HintWise's server.
 - **Your games** (what was read, your corrections and notes, and the PGN, never the photos) are kept in this browser. When you are signed in they are also kept in your HintWise account, in Supabase (US East), where only you can see them. Delete a game from My games.
 - **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
 - **Lichess:** "Open in Lichess" imports the game there, and imported games are public on Lichess. Nothing is sent to Lichess or Chess.com unless you press their button.
@@ -64,7 +68,7 @@ The server side (Netlify Functions) is only the queue for the HintWise reader. I
 
 ### The HintWise reader (your own machine)
 
-Free readings can be read by Claude Code on the owner's computer, on the Claude subscription. Set on Netlify `PGN_WORKER_TOKEN` (a long random value) and in `netlify.toml` `VITE_FREE_READER = "local-then-gateway"` (or `"local"`). Then, logged in to Claude Code with the subscription:
+Readings for signed-in people can be done by Claude Code on the owner's computer, on the Claude subscription. Set on Netlify `PGN_WORKER_TOKEN` (a long random value) and in `netlify.toml` `VITE_FREE_READER = "local-then-gateway"` (or `"local"`). Then, logged in to Claude Code with the subscription:
 
 ```sh
 export PGN_WORKER_TOKEN=...            # same value as on Netlify
@@ -116,7 +120,7 @@ Netlify Functions (only needed for the HintWise reader; every name starts with `
 | `PGN_READER_IDLE_SECONDS` | `60` | No check-in from a CLI reader for this long: it counts as not running |
 | `PGN_MAX_IMAGES`, `PGN_MAX_IMAGE_BYTES` | `2`, `2000000` | Pages per game, and the largest photo |
 
-The gateway's caps for free readings with the owner's key are set by the owner in the platform, not here.
+The gateway's caps (each person's credits) with the owner's key are set by the owner in the platform, not here.
 
 ### Develop
 
@@ -134,13 +138,12 @@ Tests never touch the network: the template modules take fakes, the CLI tests us
 | Path | What |
 |---|---|
 | `src/lib/schema.ts`, `prompt.ts` | What Claude returns, and how it is asked (shared by the browser and the CLI reader) |
-| `src/lib/read.ts`, `reading.ts` | The reading: own key, gateway, or the queue with fallback; error messages |
+| `src/lib/read.ts`, `reading.ts`, `access.ts` | The reading: own key, gateway, or the queue with fallback; error messages; which ways in to offer, and out of credits |
 | `src/lib/notation.ts`, `repair.ts` | Cleaning handwritten moves; the search that repairs misreadings |
 | `src/lib/pgn.ts`, `export.ts` | PGN export; Lichess import, email, share sheet |
 | `src/lib/library.ts` | My games: this device, plus the HintWise account when signed in |
 | `src/lib/image.ts`, `shared.ts`, `install.ts` | Photo shrinking, turning and cropping; photos shared in from the gallery; installing the app |
 | `public/sw.js`, `public/manifest.webmanifest` | Installable app: offline shell and the Android share target |
-| `public/scoresheet.html` | The free printable scoresheet |
 | `src/lib/{supabase,auth,account,llm,signin-styles}.ts` | HintWise platform template: sign-in, account deletion, model calls |
 | `src/components/` | Upload, sign-in, review, board |
 | `netlify/lib/`, `netlify/functions/` | The HintWise reader queue |

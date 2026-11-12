@@ -32,7 +32,10 @@ test.describe("on a phone", () => {
       });
     });
     await page.goto("/");
-    await expect(page.getByRole("button", { name: /Take photo/ })).toBeVisible();
+    // The photo step opens once there is a way to read it: here, the visitor's own key.
+    await expect(page.getByRole("button", { name: /Take photo/ })).toBeDisabled();
+    await page.getByLabel("API key", { exact: true }).fill("sk-ant-phone-0123456789");
+    await expect(page.getByRole("button", { name: /Take photo/ })).toBeEnabled();
     await page.setInputFiles('input[type=file][multiple]', "e2e/fixtures/scoresheet-sideways.png");
 
     const editor = page.getByRole("dialog", { name: "Turn and crop the photo" });
@@ -60,8 +63,6 @@ test.describe("on a phone", () => {
     await editor.getByRole("button", { name: "Done" }).click();
     await expect(editor).toBeHidden();
 
-    await page.getByRole("radio", { name: /My own Anthropic API key/ }).check();
-    await page.getByLabel("API key", { exact: true }).fill("sk-ant-phone-0123456789");
     const read = page.getByRole("button", { name: "Read scoresheet" });
     await read.scrollIntoViewIfNeeded();
     await read.tap();
@@ -92,8 +93,11 @@ test.describe("installed app", () => {
     }, png);
     expect(status).toBe("opaqueredirect");
     await page.goto("/?shared=1");
-    await expect(page.getByText("Page 1")).toBeVisible();
     await expect(page).toHaveURL(/\/$/);
+    // The shared photo waits until there is a way to read it, then arrives as page 1.
+    await expect(page.getByText("Page 1")).toHaveCount(0);
+    await page.getByLabel("API key", { exact: true }).fill("sk-ant-phone-0123456789");
+    await expect(page.getByText("Page 1")).toBeVisible();
   });
 
   test("the manifest makes it installable", async ({ page, request }) => {

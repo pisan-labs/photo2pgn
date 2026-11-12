@@ -26,7 +26,7 @@ export function useUser(onSignedIn?: () => void): { user: User | null; available
   return { user, available };
 }
 
-export function SignInPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SignInPanel({ open, signedIn, onClose }: { open: boolean; signedIn: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!hasSupabase() || !ref.current) return;
@@ -36,12 +36,11 @@ export function SignInPanel({ open, onClose }: { open: boolean; onClose: () => v
   return (
     <div className="signin-wrap" hidden={!open}>
       <div className="row signin-head">
-        <h2>HintWise account</h2>
+        <h2>{signedIn ? "Your account" : "Sign in"}</h2>
         <button type="button" className="link" onClick={onClose}>
           Close
         </button>
       </div>
-      <p className="hint">One account for every HintWise app. It is only needed for the free reading.</p>
       <div ref={ref} aria-label="Sign in" />
     </div>
   );

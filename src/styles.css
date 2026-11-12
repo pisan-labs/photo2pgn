@@ -1218,3 +1218,17 @@ a.button {
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+/* Signed in and out of credits: until when, above the own-key field. */
+.notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 4px solid var(--fixed-line);
+  background: var(--fixed-bg);
+  border-radius: 6px;
+}
+
+/* No way to read it yet: the photo step waits. */
+.dropzone.disabled {
+  opacity: 0.6;
+}

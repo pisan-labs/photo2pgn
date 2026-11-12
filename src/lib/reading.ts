@@ -113,20 +113,13 @@ export async function followQueued(
   return plan.viaGateway!();
 }
 
-const SCOPE_WORDS: Record<string, string> = {
-  "app-user-day": "Your daily photo2pgn allowance is used up.",
-  "app-user-week": "Your weekly photo2pgn allowance is used up.",
-  "user-day": "Your daily HintWise allowance is used up.",
-};
-
 /** A cap of the owner's key, in plain words with the reset in local time. */
 export function capMessage(err: CapReached, locale?: string): string {
-  const what = SCOPE_WORDS[err.scope] ?? (err.scope.startsWith("app-") ? "photo2pgn's shared allowance is used up." : "The free allowance is used up.");
   const at = new Date(err.resetsAt);
   const when = Number.isNaN(at.getTime())
     ? ""
-    : ` It resets ${at.toLocaleString(locale, { weekday: "short", hour: "numeric", minute: "2-digit" })}.`;
-  return `${what}${when} You can use your own Anthropic API key meanwhile.`;
+    : ` until ${at.toLocaleString(locale, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+  return `Out of credits${when}. Use your own Anthropic API key to keep going.`;
 }
 
 /** What went wrong, for the person; `ownKey` suggests switching to their own key. */
