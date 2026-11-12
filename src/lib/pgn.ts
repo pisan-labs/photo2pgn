@@ -32,6 +32,8 @@ export function normalizeDate(raw: string): string {
 export interface PgnOptions {
   /** Add a {comment} after each move that was corrected or guessed. */
   commentFixes?: boolean;
+  /** The person's notes on the game, as a comment before the first move. */
+  notes?: string;
 }
 
 export function buildTags(h: GameHeaders): [string, string][] {
@@ -72,6 +74,7 @@ export function buildPgn(headers: GameHeaders, analysis: Analysis, opts: PgnOpti
       needNumber = true; // a black move after a comment repeats its number
     }
   };
+  if (opts.notes?.trim()) tokens.push(`{${escapeComment(opts.notes)}}`);
   for (const p of analysis.plies) {
     if (p.status === "illegal" || p.status === "unchecked") break;
     const fixed = opts.commentFixes && p.status !== "ok" && p.status !== "unsure";

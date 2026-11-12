@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Extraction, GameHeaders } from "../lib/schema";
 import { rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
 import { useAnalysis } from "../lib/useAnalysis";
+import { load, save } from "../lib/storage";
+
+const FLIP_STORAGE = "photo2pgn.flipped";
 import { buildPgn, pgnFileName } from "../lib/pgn";
 import { Board, moveSquares } from "./Board";
 
@@ -11,6 +14,7 @@ export interface ReviewSession {
   headers: GameHeaders;
   images: string[]; // object URLs or demo image URL; empty after a reload
   demo: boolean;
+  notes?: string;
 }
 
 interface Props {
@@ -83,6 +87,7 @@ function Review({
   const firstToCheck = analysis.plies.find((p) => p.status !== "ok")?.index ?? null;
   const [selected, setSelected] = useState<number | null>(firstToCheck ?? (plies.length ? 0 : null));
   const [commentFixes, setCommentFixes] = useState(false);
+  const [flipped, setFlipped] = useState(() => load<boolean>(FLIP_STORAGE) === true);
 
   const counts = useMemo(() => {
     const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, skipped: 0, illegal: 0, unchecked: 0 };
@@ -183,6 +188,11 @@ function Review({
               onEdit={(v) => setEdit(sel.index, v)}
               onPrev={() => setSelected(Math.max(0, sel.index - 1))}
               onNext={() => setSelected(Math.min(analysis.plies.length - 1, sel.index + 1))}
+              flipped={flipped}
+              onFlip={() => {
+                setFlipped(!flipped);
+                save(FLIP_STORAGE, !flipped);
+              }}
             />
           ) : (
             <p>Select a move.</p>
@@ -194,10 +204,25 @@ function Review({
         <section className="panel" aria-labelledby="game-info">
           <h2 id="game-info">Game details</h2>
           <HeadersForm headers={headers} onChange={(h) => onChange({ ...session, headers: h })} />
+          <label className="notes">
+            <span>Notes</span>
+            <textarea
+              rows={3}
+              value={session.notes ?? ""}
+              placeholder="Anything to remember about this game. Added to the PGN as a comment."
+              onChange={(e) => onChange({ ...session, notes: e.target.value })}
+            />
+          </label>
         </section>
         <section className="panel" aria-labelledby="pgn-title">
           <h2 id="pgn-title">PGN</h2>
-          <PgnExport headers={headers} analysis={analysis} commentFixes={commentFixes} setCommentFixes={setCommentFixes} />
+          <PgnExport
+            headers={headers}
+            analysis={analysis}
+            notes={session.notes ?? ""}
+            commentFixes={commentFixes}
+            setCommentFixes={setCommentFixes}
+          />
         </section>
       </div>
     </div>
@@ -308,18 +333,28 @@ function PlyDetail({
   onEdit,
   onPrev,
   onNext,
+  flipped,
+  onFlip,
 }: {
   ply: PlyResult;
   edit: string | undefined;
   onEdit: (v: string | null) => void;
   onPrev: () => void;
   onNext: () => void;
+  flipped: boolean;
+  onFlip: () => void;
 }) {
   const [text, setText] = useState(edit ?? ply.san ?? ply.reading?.san ?? "");
+  const [onBoard, setOnBoard] = useState(ply.status === "illegal");
+  const [missing, setMissing] = useState<string | null>(null);
   const r = ply.reading;
-  const fen = ply.fenAfter ?? ply.fenBefore;
-  const last = ply.fenAfter ? moveSquares(ply.fenBefore, ply.san) : null;
   const side = ply.color === "w" ? "White" : "Black";
+  const canPlay = Boolean(ply.fenBefore) && ply.status !== "skipped";
+  const showBefore = onBoard && canPlay;
+  const fen = showBefore ? ply.fenBefore : (ply.fenAfter ?? ply.fenBefore);
+  const last = !showBefore && ply.fenAfter ? moveSquares(ply.fenBefore, ply.san) : null;
+  const current = ply.san ?? edit ?? r?.san ?? r?.written ?? "";
+  const withInsert = (san: string) => (ply.inserted ? `${ply.inserted.san} ${san}` : san);
   const apply = (v: string) => {
     const t = v.trim();
     if (t) onEdit(t);
@@ -393,82 +428,125 @@ function PlyDetail({
       </dl>
       {ply.note && <p className="note">{ply.note}</p>}
 
-      {ply.status !== "unchecked" && (
+      <form
+        className="edit"
+        onSubmit={(e) => {
+          e.preventDefault();
+          apply(text);
+        }}
+      >
+        <label htmlFor="move-edit">Correct move</label>
+        <div className="row">
+          <input
+            id="move-edit"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            placeholder="e.g. Nf3"
+            aria-describedby="move-edit-hint"
+          />
+          <button type="submit">Use</button>
+        </div>
+        <p className="hint" id="move-edit-hint">
+          {ply.status === "unchecked"
+            ? "This move is checked once the move in red is fixed."
+            : "Type a move, or tap a piece and its square on the board."}
+        </p>
+        {ply.suggestions.length > 0 && (
+          <div className="chips" aria-label="Legal moves">
+            {ply.suggestions.slice(0, 12).map((s) => (
+              <button key={s} type="button" className="chip" onClick={() => onEdit(withInsert(s))}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="row">
+          {(ply.status === "fixed" || ply.status === "unsure") && ply.san && (
+            <button type="button" className="secondary" onClick={() => onEdit(withInsert(ply.san!))}>
+              {ply.inserted ? `${ply.inserted.san} then ${ply.san} is right` : `${ply.san} is right`}
+            </button>
+          )}
+          {ply.inserted && ply.san && (
+            <button type="button" className="secondary" onClick={() => onEdit(ply.san!)}>
+              Remove the inserted {ply.inserted.san}
+            </button>
+          )}
+          {!ply.inserted && ply.status !== "skipped" && missing === null && (
+            <button type="button" className="secondary" onClick={() => setMissing("")}>
+              A move is missing before this one
+            </button>
+          )}
+          {ply.status !== "skipped" && (
+            <button type="button" className="secondary" onClick={() => onEdit("-")}>
+              Leave this entry out
+            </button>
+          )}
+          {edit !== undefined && (
+            <button type="button" className="link" onClick={() => onEdit(null)}>
+              Undo my change
+            </button>
+          )}
+        </div>
+      </form>
+      {missing !== null && (
         <form
-          className="edit"
+          className="edit missing"
           onSubmit={(e) => {
             e.preventDefault();
-            apply(text);
+            if (missing.trim()) onEdit(`${missing.trim()} ${current}`);
           }}
         >
-          <label htmlFor="move-edit">Correct move</label>
+          <label htmlFor="missing-move">The missing move, played before {current || "this one"}</label>
           <div className="row">
             <input
-              id="move-edit"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
+              id="missing-move"
+              value={missing}
+              onChange={(e) => setMissing(e.target.value)}
               spellCheck={false}
               autoCapitalize="off"
               autoComplete="off"
-              placeholder="e.g. Nf3"
-              aria-describedby="move-edit-hint"
+              placeholder="e.g. e5"
+              autoFocus
             />
-            <button type="submit">Use</button>
-          </div>
-          <p className="hint" id="move-edit-hint">
-            A move missing before this one? Type both, like <code>e5 Nf6</code>. Not a move at all? Type{" "}
-            <code>-</code> to leave it out.
-          </p>
-          {ply.suggestions.length > 0 && (
-            <div className="chips" aria-label="Legal moves">
-              {ply.suggestions.slice(0, 12).map((s) => (
-                <button key={s} type="button" className="chip" onClick={() => onEdit(s)}>
-                  {s}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="row">
-            {(ply.status === "fixed" || ply.status === "unsure") && ply.san && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => onEdit(ply.inserted ? `${ply.inserted.san} ${ply.san}` : ply.san!)}
-              >
-                {ply.inserted ? `${ply.inserted.san} then ${ply.san} is right` : `${ply.san} is right`}
-              </button>
-            )}
-            {ply.inserted && ply.san && (
-              <button type="button" className="secondary" onClick={() => onEdit(ply.san!)}>
-                Remove the inserted {ply.inserted.san}
-              </button>
-            )}
-            {ply.status !== "skipped" && ply.status !== "ok" && (
-              <button type="button" className="secondary" onClick={() => onEdit("-")}>
-                Leave this entry out
-              </button>
-            )}
-            {edit !== undefined && (
-              <button type="button" className="link" onClick={() => onEdit(null)}>
-                Undo my change
-              </button>
-            )}
+            <button type="submit">Add</button>
+            <button type="button" className="link" onClick={() => setMissing(null)}>
+              Cancel
+            </button>
           </div>
         </form>
       )}
 
       {fen && (
-        <Board
-          fen={fen}
-          lastMove={last}
-          caption={
-            ply.san
-              ? `After ${ply.label} ${ply.san}`
-              : ply.status === "skipped"
-                ? "Position when the entry was left out"
-                : `Before ${ply.label ?? plyLabel(ply)}, ${side} to move`
-          }
-        />
+        <>
+          <div className="row board-tools">
+            {canPlay && (
+              <button type="button" className="secondary small" onClick={() => setOnBoard((b) => !b)} aria-pressed={showBefore}>
+                {showBefore ? "Show the move played" : "Change it on the board"}
+              </button>
+            )}
+            <button type="button" className="secondary small" onClick={onFlip}>
+              Flip board
+            </button>
+          </div>
+          <Board
+            fen={fen}
+            lastMove={last}
+            flipped={flipped}
+            onMove={showBefore ? (san) => onEdit(withInsert(san)) : undefined}
+            caption={
+              showBefore
+                ? `${side} to move: tap a piece, then its square`
+                : ply.san
+                  ? `After ${ply.label} ${ply.san}`
+                  : ply.status === "skipped"
+                    ? "Position when the entry was left out"
+                    : `Before ${ply.label ?? plyLabel(ply)}, ${side} to move`
+            }
+          />
+        </>
       )}
     </div>
   );
@@ -515,15 +593,17 @@ function HeadersForm({ headers, onChange }: { headers: GameHeaders; onChange: (h
 function PgnExport({
   headers,
   analysis,
+  notes,
   commentFixes,
   setCommentFixes,
 }: {
   headers: GameHeaders;
   analysis: Analysis;
+  notes: string;
   commentFixes: boolean;
   setCommentFixes: (v: boolean) => void;
 }) {
-  const pgn = useMemo(() => buildPgn(headers, analysis, { commentFixes }), [headers, analysis, commentFixes]);
+  const pgn = useMemo(() => buildPgn(headers, analysis, { commentFixes, notes }), [headers, analysis, commentFixes, notes]);
   const [copied, setCopied] = useState(false);
   const fileName = pgnFileName(headers);
   const download = () => {
