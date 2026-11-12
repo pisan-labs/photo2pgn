@@ -16,6 +16,7 @@ export interface AppConfig {
   limits: Limits;
   localTimeoutMs: number; // a queued job fails after this long
   leaseMs: number; // how long a claimed job is reserved for one CLI reader
+  readerIdleMs: number; // no CLI check-in for this long: the reader counts as not running
   maxImages: number;
   maxImageBytes: number; // per image, after decoding
   supabaseUrl: string;
@@ -43,6 +44,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     localTimeoutMs: int(env.PGN_LOCAL_TIMEOUT_MINUTES, 30) * 60_000,
     leaseMs: int(env.PGN_LEASE_MINUTES, 15) * 60_000,
+    readerIdleMs: int(env.PGN_READER_IDLE_SECONDS, 60) * 1000,
     maxImages: int(env.PGN_MAX_IMAGES, 2),
     maxImageBytes: int(env.PGN_MAX_IMAGE_BYTES, 2_000_000),
     supabaseUrl: env.PGN_SUPABASE_URL?.trim() || HINTWISE_SUPABASE_URL,

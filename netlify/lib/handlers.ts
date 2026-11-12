@@ -45,6 +45,26 @@ export interface Deps {
 }
 
 const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+// Written each time a CLI reader asks for work (every 20 s by default), claims
+// a job (busy until its lease ends) or sends a result.
+export const HEARTBEAT = "reader/heartbeat";
+interface Heartbeat {
+  at: string;
+  readingUntil?: string;
+}
+
+async function beat(deps: Deps, now: Date, readingUntil?: string): Promise<void> {
+  const value: Heartbeat = readingUntil ? { at: now.toISOString(), readingUntil } : { at: now.toISOString() };
+  await deps.jobs.setJSON(HEARTBEAT, value);
+}
+
+/** A CLI reader checked in lately, or is reading a job right now. */
+export async function readerRunning(deps: Deps, now: Date): Promise<boolean> {
+  const hb = (await deps.jobs.getJSON<Heartbeat>(HEARTBEAT))?.value;
+  if (!hb) return false;
+  const t = now.getTime();
+  return t - Date.parse(hb.at) <= deps.config.readerIdleMs || (hb.readingUntil !== undefined && t < Date.parse(hb.readingUntil));
+}
 const MAX_ATTEMPTS = 3;
 
 function json(status: number, body: unknown): Response {
@@ -92,7 +112,7 @@ export async function handleConvert(req: Request, deps: Deps): Promise<Response>
   const user = await userFrom(req, deps.verifyUser);
   if (!user) return fail(401, "sign_in", "Sign in to use the free reading.");
 
-  let body: { images?: unknown };
+  let body: { images?: unknown; onlyIfReaderRunning?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -106,6 +126,13 @@ export async function handleConvert(req: Request, deps: Deps): Promise<Response>
       return fail(400, "bad_image", "Photos must be JPEG, PNG, WebP or GIF.");
     }
     if (base64Size(img.data) > config.maxImageBytes) return fail(413, "image_too_large", "A photo is too large.");
+  }
+  // The browser has another way to read it (local-then-gateway) and no reader
+  // is running (the owner's computer is off): say so at once, uncounted, so
+  // it reads through the gateway instead of waiting. Without the flag the job
+  // waits in the queue for a reader started later ("local").
+  if (body.onlyIfReaderRunning === true && !(await readerRunning(deps, now))) {
+    return fail(503, "reader_idle", "The HintWise reader is not running right now.");
   }
 
   const identity = `user:${user.id}`;
@@ -221,6 +248,7 @@ function open(job: Job, now: Date): boolean {
 export async function handleWorkerList(req: Request, deps: Deps): Promise<Response> {
   if (!(await workerAuthorized(req, deps.config))) return fail(401, "unauthorized", "Bad or missing worker token.");
   const now = nowOf(deps);
+  await beat(deps, now);
   const jobs: { id: string; createdAt: string; imageCount: number; attempts: number }[] = [];
   for (const key of await deps.jobs.list("queue/")) {
     const id = key.slice("queue/".length);
@@ -248,6 +276,7 @@ export async function handleWorkerClaim(req: Request, id: string | undefined, de
   if (!(await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfMatch: entry.etag }))) {
     return fail(409, "taken", "Another reader claimed this job first.");
   }
+  await beat(deps, now, lease.until);
   const images: ImageInput[] = [];
   for (let n = 0; n < job.imageCount; n++) {
     const img = await deps.jobs.getBytes(`img/${job.id}/${n}`);
@@ -284,6 +313,7 @@ export async function handleWorkerResult(req: Request, id: string | undefined, d
   } | null;
   if (!body) return fail(400, "bad_request", "The request body is not JSON.");
   const now = nowOf(deps);
+  await beat(deps, now);
   const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
   if (!entry) return fail(404, "not_found", "No such job.");
   const job = entry.value;

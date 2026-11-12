@@ -70,7 +70,7 @@ describe("readPhotos", () => {
       },
     });
     expect(ex.rows).toHaveLength(17);
-    expect(queue).toHaveBeenCalledWith(photos, "tok");
+    expect(queue).toHaveBeenCalledWith(photos, "tok", undefined, { onlyIfReaderRunning: false });
     expect(phases).toEqual(["queued", "local"]);
   });
 
@@ -105,13 +105,14 @@ describe("readPhotos", () => {
   });
 
   it("local-then-gateway: reads through the gateway at once when the queue is off or out of reach", async () => {
-    for (const code of ["reader_off", "network", "start_failed"]) {
+    for (const code of ["reader_off", "reader_idle", "network", "start_failed"]) {
       const fetch = gatewayOk();
       const ex = await readPhotos(photos, {
         mode: "free",
         reader: "local-then-gateway",
         getToken: async () => "tok",
-        queue: async () => {
+        queue: async (_p, _t, _f, opts) => {
+          expect(opts).toEqual({ onlyIfReaderRunning: true });
           throw new ApiError(code, "queue unavailable");
         },
         ask: { fetch, gatewayUrl: "https://gw.test" },
@@ -187,6 +188,10 @@ describe("queue client", () => {
     expect(await queueForReader(photos, "tok", ok as unknown as typeof fetch)).toEqual({ jobId: "j", viewToken: "v" });
     const [, init] = ok.mock.calls[0] as unknown as [string, RequestInit];
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer tok");
+    expect(JSON.parse(String(init.body))).not.toHaveProperty("onlyIfReaderRunning");
+    await queueForReader(photos, "tok", ok as unknown as typeof fetch, { onlyIfReaderRunning: true });
+    const [, init2] = ok.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init2.body)).onlyIfReaderRunning).toBe(true);
     const denied = async () => json(429, { error: { code: "limit_day", message: "Used up" } });
     await expect(queueForReader(photos, "tok", denied as unknown as typeof fetch)).rejects.toMatchObject({ code: "limit_day" });
     const down = async () => {

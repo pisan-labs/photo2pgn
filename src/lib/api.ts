@@ -31,14 +31,24 @@ function errorOf(body: Record<string, unknown>, status: number): ApiError {
   return new ApiError(e.code ?? "error", e.message ?? `HTTP ${status}`);
 }
 
+export interface QueueOptions {
+  /** Refuse at once (reader_idle) unless a reader is running: the caller has another way to read. */
+  onlyIfReaderRunning?: boolean;
+}
+
 /** Queue photos for the HintWise reader; needs the visitor's session token. */
-export async function queueForReader(photos: PhotoInput[], token: string, doFetch: typeof fetch = fetch): Promise<QueuedJob> {
+export async function queueForReader(
+  photos: PhotoInput[],
+  token: string,
+  doFetch: typeof fetch = fetch,
+  opts: QueueOptions = {},
+): Promise<QueuedJob> {
   let res: Response;
   try {
     res = await doFetch("/api/convert", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ images: photos }),
+      body: JSON.stringify({ images: photos, ...(opts.onlyIfReaderRunning ? { onlyIfReaderRunning: true } : {}) }),
     });
   } catch {
     throw new ApiError("network", "Could not reach the server. Check your connection and try again.");

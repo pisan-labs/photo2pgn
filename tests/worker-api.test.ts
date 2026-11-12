@@ -12,6 +12,8 @@ import {
   handleWorkerClaim,
   handleWorkerList,
   handleWorkerResult,
+  HEARTBEAT,
+  readerRunning,
   type Deps,
 } from "../netlify/lib/handlers";
 import { readFileSync } from "node:fs";
@@ -32,11 +34,11 @@ function setup(env: Record<string, string> = {}) {
     verifyUser: async (t) => (t === "alice-token" || t === "bob-token" ? { id: t.replace("-token", "") } : null),
   };
   const call = {
-    convert: async (who: string | null = "alice", images: unknown[] = [{ mediaType: "image/png", data: PNG }]) => {
+    convert: async (who: string | null = "alice", images: unknown[] = [{ mediaType: "image/png", data: PNG }], extra: object = {}) => {
       const headers: Record<string, string> = { "content-type": "application/json" };
       if (who) headers.authorization = `Bearer ${who}-token`;
       const res = await handleConvert(
-        new Request("https://app.test/api/convert", { method: "POST", headers, body: JSON.stringify({ images }) }),
+        new Request("https://app.test/api/convert", { method: "POST", headers, body: JSON.stringify({ images, ...extra }) }),
         deps,
       );
       return { status: res.status, body: await res.json() };
@@ -91,6 +93,11 @@ describe("settings", () => {
     expect(toml).toContain(`VITE_SUPABASE_ANON_KEY = "${HINTWISE_SUPABASE_ANON_KEY}"`);
     expect(toml).not.toMatch(/sk-ant-|ANTHROPIC/);
   });
+  it("sends the netlify.app address to hintwise.org and serves the manifest as a manifest", () => {
+    const toml = readFileSync("netlify.toml", "utf8");
+    expect(toml).toMatch(/from = "https:\/\/photo2pgn\.netlify\.app\/\*"\s+to = "https:\/\/photo2pgn\.hintwise\.org\/:splat"\s+status = 301\s+force = true/);
+    expect(toml).toMatch(/for = "\/manifest\.webmanifest"\s+\[headers\.values\]\s+Content-Type = "application\/manifest\+json"/);
+  });
   it("reads PGN_ settings and falls back on bad numbers", () => {
     const c = loadConfig({ PGN_WORKER_TOKEN: " t ", PGN_READER_PER_DAY: "7", PGN_READER_PER_WEEK: "lots" });
     expect(c).toMatchObject({ workerToken: "t", limits: { perDay: 7, perWeek: 10, globalPerDay: 100 } });
@@ -139,6 +146,27 @@ describe("queue", () => {
     expect((await call.convert("mallory-not")).status).toBe(401);
     const off = setup({ PGN_WORKER_TOKEN: "" });
     expect((await off.call.convert("alice")).body.error.code).toBe("reader_off");
+  });
+
+  it("with onlyIfReaderRunning, refuses at once and uncounted unless a reader is running", async () => {
+    const { deps, call, setClock } = setup();
+    const ask = () => call.convert("alice", [{ mediaType: "image/png", data: PNG }], { onlyIfReaderRunning: true });
+    const idle = await ask();
+    expect([idle.status, idle.body.error.code]).toEqual([503, "reader_idle"]);
+    expect((await call.convert("bob")).status).toBe(202); // without the flag it waits for a reader started later
+    await call.list(); // the CLI checks in
+    expect((await ask()).status).toBe(202);
+    setClock(new Date("2026-11-12T10:01:01Z")); // 61 s later, no check-in
+    expect((await ask()).body.error.code).toBe("reader_idle");
+    // Busy reading a job (no polling meanwhile) counts as running until the lease ends.
+    const [first] = (await call.list()).body.jobs;
+    expect((await call.claim(first.id)).status).toBe(200);
+    setClock(new Date("2026-11-12T10:10:00Z"));
+    expect(await readerRunning(deps, new Date("2026-11-12T10:10:00Z"))).toBe(true);
+    expect((await ask()).status).toBe(202);
+    setClock(new Date("2026-11-12T10:17:00Z")); // lease (15 min) over, still silent
+    expect((await ask()).body.error.code).toBe("reader_idle");
+    expect(await call.used()).toBe(2);
   });
 
   it("hands over photos, prompt and schema on claim, and accepts a valid reading", async () => {
@@ -251,6 +279,8 @@ describe("queue", () => {
     setClock(new Date("2026-11-13T11:00:00Z"));
     expect(await cleanupJobs(deps)).toBe(1);
     expect(await deps.jobs.list("")).toEqual([]);
+    await call.list();
+    expect(await deps.jobs.list("")).toEqual([HEARTBEAT]); // the reader's one small record
     setClock(new Date("2026-11-24T10:00:00Z"));
     expect(await cleanupQuota(deps)).toBe(3);
   });

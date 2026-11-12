@@ -5,9 +5,10 @@
 //               "gateway" (default): the owner's key through the HintWise
 //                   gateway and its caps;
 //               "local": queued for the owner's CLI reader;
-//               "local-then-gateway": queued, and if no reader has claimed it
-//                   within VITE_LOCAL_FALLBACK_SECONDS, cancelled and read
-//                   through the gateway instead.
+//               "local-then-gateway": queued only while a reader is running
+//                   (else straight to the gateway), and if no reader has
+//                   claimed it within VITE_LOCAL_FALLBACK_SECONDS, cancelled
+//                   and read through the gateway instead.
 import Anthropic from "@anthropic-ai/sdk";
 import { CapReached, GatewayError, LlmUnavailable, memoryStorage, setByokKey, type AskDeps } from "./llm";
 import { ReadFailed, readScoresheet, type PhotoInput } from "./read";
@@ -68,9 +69,9 @@ export async function readPhotos(photos: PhotoInput[], plan: ReadPlan): Promise<
   phase("queued");
   let job: QueuedJob;
   try {
-    job = await (plan.queue ?? queueForReader)(photos, token);
+    job = await (plan.queue ?? queueForReader)(photos, token, undefined, { onlyIfReaderRunning: reader === "local-then-gateway" });
   } catch (err) {
-    // The reader's queue is off or out of reach: read through the gateway
+    // No reader is running, or the queue is off or out of reach: read through the gateway
     // straight away rather than leave the visitor with an error. Its own
     // allowance answers (limit_*) are passed on.
     const fallBack = reader === "local-then-gateway" && err instanceof ApiError && !err.code.startsWith("limit_");

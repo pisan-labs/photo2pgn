@@ -77,7 +77,8 @@ node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org           # keep w
 - `claude` runs with no tools at all and no hooks, plugins, MCP servers or CLAUDE.md (`--safe-mode`); the photos go in as image blocks, so text in a photo cannot make it run anything. It gets the site's own instructions and answer schema.
 - It never bills per token: `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from claude's environment, and the CLI stops if claude reports any API key in use (`--allow-api-key` overrides).
 - A failed reading goes back in the queue up to 3 times, then the visitor sees an error and the reading is not counted.
-- With `local-then-gateway`, the browser cancels a job no reader has claimed within `VITE_LOCAL_FALLBACK_SECONDS` (default 120) and reads it through the gateway instead; if the queue is off or unreachable it uses the gateway straight away. With `local`, a job waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30).
+- The CLI checks in each time it asks for work. A reader counts as running when it checked in within `PGN_READER_IDLE_SECONDS` (default 60; keep it above the CLI's `--interval`), or is reading a job whose lease has not ended.
+- With `local-then-gateway`, a reading goes to the queue only while a reader is running; otherwise, or when the queue is off or unreachable, it goes through the gateway at once. A queued job no reader has claimed within `VITE_LOCAL_FALLBACK_SECONDS` (default 120) is cancelled and read through the gateway. With `local`, a job waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30), so readings can pile up for a later `--once`.
 - Open question for the owner: whether serving public visitors through a personal Claude subscription fits that subscription's terms. Check them before relying on this path for public traffic.
 - To keep it running on a Mac, start it from a launchd agent or a `tmux` session. It keeps going through network blips and stops on setup problems (wrong token, missing `claude`).
 
@@ -99,6 +100,7 @@ Netlify Functions (only needed for the HintWise reader; every name starts with `
 | `PGN_READER_PER_DAY` / `_PER_WEEK` / `_GLOBAL_PER_DAY` | 3 / 10 / 100 | Readings by the HintWise reader per person per UTC day and ISO week, and for everyone per day |
 | `PGN_LOCAL_TIMEOUT_MINUTES` | `30` | A job no reader picks up fails after this long, and is not counted |
 | `PGN_LEASE_MINUTES` | `15` | How long a claimed job is reserved for one CLI reader |
+| `PGN_READER_IDLE_SECONDS` | `60` | No check-in from a CLI reader for this long: it counts as not running |
 | `PGN_MAX_IMAGES`, `PGN_MAX_IMAGE_BYTES` | `2`, `2000000` | Pages per game, and the largest photo |
 
 The gateway's caps for free readings with the owner's key are set by the owner in the platform, not here.
