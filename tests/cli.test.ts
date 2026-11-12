@@ -83,5 +83,6 @@ describe("pgn-worker CLI", () => {
     const r = await cli(["--once"], { PGN_WORKER_TOKEN: "wrong" });
     expect(r.code).toBe(1);
     expect(r.out).toContain("refused the worker token");
+    expect(r.out).toContain("differs from the site's PGN_WORKER_TOKEN");
   });
 });

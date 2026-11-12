@@ -89,7 +89,11 @@ async function api(method, path, body) {
   } catch {
     data = { error: { message: text.slice(0, 200) } };
   }
-  if (res.status === 401) throw new FatalError("The site refused the worker token.");
+  if (res.status === 401) {
+    throw new FatalError(
+      "The site refused the worker token: PGN_WORKER_TOKEN here differs from the site's PGN_WORKER_TOKEN on Netlify, or the site has none set.",
+    );
+  }
   return { status: res.status, data };
 }
 
@@ -242,7 +246,7 @@ async function main() {
     let jobs = [];
     try {
       const { status, data } = await api("GET", "/api/worker/jobs");
-      if (status === 404) throw new FatalError("The site has no worker endpoints (is PGN_WORKER_TOKEN set there?).");
+      if (status === 404) throw new FatalError("The site has no worker endpoints: check --site, and that the site is deployed.");
       if (status !== 200) throw new Error(`the site answered ${status}: ${data.error?.message ?? ""}`);
       jobs = data.jobs ?? [];
     } catch (err) {
