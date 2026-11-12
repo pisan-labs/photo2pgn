@@ -52,7 +52,7 @@ describe("analyzeGame", () => {
   it("analyzes a game quickly", () => {
     const t = performance.now();
     analyze(OPERA_GAME, { 6: { san: "dxe6", written: "dxe6" }, 9: { san: "", written: "", legibility: "illegible" } });
-    expect(performance.now() - t).toBeLessThan(1500);
+    expect(performance.now() - t).toBeLessThan(1500 * Number(process.env.PERF_FACTOR ?? 1));
   });
 
   it("goes back and uses an alternative when a legal misreading breaks a later move", () => {
@@ -116,7 +116,7 @@ describe("analyzeGame", () => {
     });
     const t = performance.now();
     const a = analyze(OPERA_GAME, misread);
-    expect(performance.now() - t).toBeLessThan(3000);
+    expect(performance.now() - t).toBeLessThan(3000 * Number(process.env.PERF_FACTOR ?? 1));
     expect(a.stoppedAt).toBeNull();
     const idx = Object.keys(misread).map(Number);
     const right = idx.filter((i) => a.plies[i].san === OPERA_GAME[i].replace("#", "#")).length;

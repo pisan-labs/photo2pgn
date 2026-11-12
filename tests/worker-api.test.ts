@@ -1,53 +1,48 @@
+// The CLI reader queue: sign-in, caps, claims, leases, results, cancel.
 import { describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../netlify/lib/config";
+import { HINTWISE_SUPABASE_ANON_KEY, HINTWISE_SUPABASE_URL, loadConfig } from "../netlify/lib/config";
 import { memoryKV } from "../netlify/lib/kv";
+import { supabaseVerifier } from "../netlify/lib/auth";
+import { dayKey, getQuota, release, reserve, weekKey } from "../netlify/lib/quota";
 import {
+  cleanupJobs,
+  cleanupQuota,
   handleConvert,
   handleJob,
-  handleQuota,
   handleWorkerClaim,
   handleWorkerList,
   handleWorkerResult,
-  runWorker,
   type Deps,
-  type WorkerRequest,
 } from "../netlify/lib/handlers";
+import { readFileSync } from "node:fs";
 import { extraction, rowsFrom, OPERA_GAME } from "./helpers";
 
 const TOKEN = "worker-secret";
 const PNG = btoa("png bytes");
+const LIMITS = { perDay: 2, perWeek: 3, globalPerDay: 5 };
 
 function setup(env: Record<string, string> = {}) {
-  const started: WorkerRequest[] = [];
   let clock = new Date("2026-11-12T10:00:00Z");
   const deps: Deps = {
-    config: loadConfig({ PGN_FREE_READER: "local", PGN_WORKER_TOKEN: TOKEN, ...env }),
+    config: { ...loadConfig({ PGN_WORKER_TOKEN: TOKEN, ...env }), limits: LIMITS },
     jobs: memoryKV(),
     quota: memoryKV(),
     now: () => clock,
-    startWorker: async (b) => {
-      started.push(b);
-    },
-    readScoresheet: vi.fn(async () => ({
-      extraction: extraction(rowsFrom(OPERA_GAME)),
-      usage: { inputTokens: 1, outputTokens: 1, model: "api" },
-    })),
+    // "alice-token" signs in as alice, "bob-token" as bob; anything else is nobody.
+    verifyUser: async (t) => (t === "alice-token" || t === "bob-token" ? { id: t.replace("-token", "") } : null),
   };
   const call = {
-    convert: async (mode = "free", headers: Record<string, string> = {}) => {
+    convert: async (who: string | null = "alice", images: unknown[] = [{ mediaType: "image/png", data: PNG }]) => {
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (who) headers.authorization = `Bearer ${who}-token`;
       const res = await handleConvert(
-        new Request("https://app.test/api/convert", {
-          method: "POST",
-          headers: { "content-type": "application/json", ...headers },
-          body: JSON.stringify({ mode, images: [{ mediaType: "image/png", data: PNG }] }),
-        }),
-        "1.2.3.4",
+        new Request("https://app.test/api/convert", { method: "POST", headers, body: JSON.stringify({ images }) }),
         deps,
       );
       return { status: res.status, body: await res.json() };
     },
-    job: async (jobId: string, viewToken: string) =>
-      (await handleJob(new Request(`https://app.test/api/jobs/${jobId}?token=${viewToken}`), jobId, deps)).json(),
+    job: async (jobId: string, viewToken: string, method = "GET") =>
+      (await handleJob(new Request(`https://app.test/api/jobs/${jobId}?token=${viewToken}`, { method }), jobId, deps)).json(),
     list: async (token = TOKEN) => {
       const res = await handleWorkerList(new Request("https://app.test/api/worker/jobs", { headers: { authorization: `Bearer ${token}` } }), deps);
       return { status: res.status, body: await res.json() };
@@ -76,43 +71,104 @@ function setup(env: Record<string, string> = {}) {
       );
       return { status: res.status, body: await res.json() };
     },
-    quota: async () => (await handleQuota(new Request("https://app.test/api/quota"), "1.2.3.4", deps)).json(),
+    used: async (who = "alice") => (await getQuota(deps.quota, `user:${who}`, LIMITS, clock)).day.used,
   };
-  return { deps, started, call, setClock: (d: Date) => (clock = d) };
+  return { deps, call, setClock: (d: Date) => (clock = d) };
 }
 
-describe("CLI reader queue", () => {
-  it("queues a free job for the CLI instead of starting the API worker", async () => {
-    const { started, call } = setup();
-    expect((await call.quota()).freeAvailable).toBe(true);
-    const { status, body } = await call.convert();
-    expect(status).toBe(202);
-    expect(started).toHaveLength(0);
-    const list = await call.list();
-    expect(list.body.jobs.map((j: { id: string }) => j.id)).toEqual([body.jobId]);
-    expect((await call.job(body.jobId, body.viewToken)).reader).toBe("local");
+describe("settings", () => {
+  it("ignores ANTHROPIC_* and CLAUDE_* variables and has no key setting at all", () => {
+    const c = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-personal", CLAUDE_EFFORT: "xhigh" });
+    expect(JSON.stringify(c)).not.toContain("sk-ant");
+    expect(c.workerToken).toBeNull();
+  });
+  it("uses the same public Supabase values as .env.example", () => {
+    const env = readFileSync(".env.example", "utf8");
+    expect(env).toContain(`VITE_SUPABASE_URL=${HINTWISE_SUPABASE_URL}`);
+    expect(env).toContain(`VITE_SUPABASE_ANON_KEY=${HINTWISE_SUPABASE_ANON_KEY}`);
+    const toml = readFileSync("netlify.toml", "utf8");
+    expect(toml).toContain(`VITE_SUPABASE_URL = "${HINTWISE_SUPABASE_URL}"`);
+    expect(toml).toContain(`VITE_SUPABASE_ANON_KEY = "${HINTWISE_SUPABASE_ANON_KEY}"`);
+    expect(toml).not.toMatch(/sk-ant-|ANTHROPIC/);
+  });
+  it("reads PGN_ settings and falls back on bad numbers", () => {
+    const c = loadConfig({ PGN_WORKER_TOKEN: " t ", PGN_READER_PER_DAY: "7", PGN_READER_PER_WEEK: "lots" });
+    expect(c).toMatchObject({ workerToken: "t", limits: { perDay: 7, perWeek: 10, globalPerDay: 100 } });
+  });
+});
+
+describe("sign-in check", () => {
+  it("asks Supabase Auth whose token it is", async () => {
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const h = new Headers(init?.headers);
+      expect(url).toBe("https://auth.test/auth/v1/user");
+      expect(h.get("apikey")).toBe("anon");
+      return h.get("authorization") === "Bearer good"
+        ? new Response(JSON.stringify({ id: "u1" }), { status: 200 })
+        : new Response("{}", { status: 401 });
+    });
+    const verify = supabaseVerifier("https://auth.test/", "anon", fetch as unknown as typeof globalThis.fetch);
+    expect(await verify("good")).toEqual({ id: "u1" });
+    expect(await verify("bad")).toBeNull();
+    expect(await verify("")).toBeNull();
+  });
+});
+
+describe("calendar keys and caps", () => {
+  it("uses ISO weeks", () => {
+    expect(weekKey(new Date("2026-01-01T12:00:00Z"))).toBe("2026-W01");
+    expect(weekKey(new Date("2027-01-01T12:00:00Z"))).toBe("2026-W53");
+    expect(dayKey(new Date("2026-11-12T23:59:00Z"))).toBe("2026-11-12");
+  });
+  it("stops at the day cap, then the week cap, and does not let parallel requests pass", async () => {
+    const kv = memoryKV();
+    const mon = new Date("2026-11-09T10:00:00Z");
+    const results = await Promise.all(Array.from({ length: 5 }, () => reserve(kv, "a", LIMITS, mon)));
+    expect(results.filter((r) => r.ok)).toHaveLength(2);
+    expect(await reserve(kv, "a", LIMITS, new Date("2026-11-10T10:00:00Z"))).toEqual({ ok: true });
+    expect(await reserve(kv, "a", LIMITS, new Date("2026-11-10T11:00:00Z"))).toEqual({ ok: false, denied: "week" });
+    await release(kv, "a", mon);
+    expect((await getQuota(kv, "a", LIMITS, mon)).day.used).toBe(1);
+  });
+});
+
+describe("queue", () => {
+  it("needs a signed-in visitor and a running reader", async () => {
+    const { call } = setup();
+    expect((await call.convert(null)).status).toBe(401);
+    expect((await call.convert("mallory-not")).status).toBe(401);
+    const off = setup({ PGN_WORKER_TOKEN: "" });
+    expect((await off.call.convert("alice")).body.error.code).toBe("reader_off");
   });
 
   it("hands over photos, prompt and schema on claim, and accepts a valid reading", async () => {
     const { call } = setup();
-    const { body: job } = await call.convert();
+    const { status, body: job } = await call.convert();
+    expect(status).toBe(202);
+    expect((await call.list()).body.jobs.map((j: { id: string }) => j.id)).toEqual([job.jobId]);
     const claim = await call.claim(job.jobId);
-    expect(claim.status).toBe(200);
     expect(claim.body.images).toEqual([{ mediaType: "image/png", data: PNG }]);
     expect(claim.body.systemPrompt).toContain("chess scoresheets");
     expect(claim.body.schema.properties.rows).toBeTruthy();
-    // Claimed jobs leave the list.
     expect((await call.list()).body.jobs).toEqual([]);
+    expect((await call.job(job.jobId, job.viewToken)).status).toBe("running");
 
-    const ok = await call.result(job.jobId, {
-      leaseToken: claim.body.leaseToken,
-      extraction: extraction(rowsFrom(OPERA_GAME)),
-      usage: { model: "claude-opus-5-5 (subscription)" },
-    });
-    expect(ok).toEqual({ status: 200, body: { ok: true } });
+    const ok = await call.result(job.jobId, { leaseToken: claim.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) });
+    expect(ok.status).toBe(200);
     const done = await call.job(job.jobId, job.viewToken);
     expect(done.status).toBe("done");
     expect(done.result.rows).toHaveLength(17);
+    expect(await call.used()).toBe(1);
+  });
+
+  it("counts readings per signed-in person", async () => {
+    const { call } = setup();
+    expect((await call.convert("alice")).status).toBe(202);
+    expect((await call.convert("alice")).status).toBe(202);
+    const third = await call.convert("alice");
+    expect(third.status).toBe(429);
+    expect(third.body.error.message).toContain("own API key");
+    expect((await call.convert("bob")).status).toBe(202);
   });
 
   it("rejects a reading that does not match the schema, and keeps the lease", async () => {
@@ -122,21 +178,17 @@ describe("CLI reader queue", () => {
     const bad = await call.result(job.jobId, { leaseToken: claim.body.leaseToken, extraction: { rows: "nope" } });
     expect(bad.status).toBe(422);
     expect(bad.body.issues.length).toBeGreaterThan(0);
-    const good = await call.result(job.jobId, { leaseToken: claim.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) });
-    expect(good.status).toBe(200);
+    expect((await call.result(job.jobId, { leaseToken: claim.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) })).status).toBe(200);
   });
 
   it("lets only one reader claim a job, and reopens it when the lease runs out", async () => {
     const { call, setClock } = setup();
     const { body: job } = await call.convert();
     const first = await call.claim(job.jobId, "a");
-    expect(first.status).toBe(200);
     expect((await call.claim(job.jobId, "b")).status).toBe(409);
-    setClock(new Date("2026-11-12T10:16:00Z")); // lease is 15 minutes
-    expect((await call.list()).body.jobs).toHaveLength(1);
+    setClock(new Date("2026-11-12T10:16:00Z"));
     const second = await call.claim(job.jobId, "b");
     expect(second.status).toBe(200);
-    // The first reader's late answer is refused.
     const late = await call.result(job.jobId, { leaseToken: first.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) });
     expect(late.status).toBe(409);
   });
@@ -146,57 +198,60 @@ describe("CLI reader queue", () => {
     const { body: job } = await call.convert();
     for (let i = 0; i < 2; i++) {
       const c = await call.claim(job.jobId);
-      const r = await call.result(job.jobId, { leaseToken: c.body.leaseToken, error: { message: "claude crashed" }, retry: true });
-      expect(r.body.requeued).toBe(true);
+      expect((await call.result(job.jobId, { leaseToken: c.body.leaseToken, error: { message: "crash" }, retry: true })).body.requeued).toBe(true);
     }
     const c = await call.claim(job.jobId);
-    const r = await call.result(job.jobId, { leaseToken: c.body.leaseToken, error: { message: "claude crashed" }, retry: true });
-    expect(r.body.requeued).toBe(false);
-    const failed = await call.job(job.jobId, job.viewToken);
-    expect(failed).toMatchObject({ status: "error", error: { code: "reader_failed" } });
-    expect((await call.quota()).quota.day.used).toBe(0);
+    expect((await call.result(job.jobId, { leaseToken: c.body.leaseToken, error: { message: "crash" }, retry: true })).body.requeued).toBe(false);
+    expect(await call.job(job.jobId, job.viewToken)).toMatchObject({ status: "error", error: { code: "reader_failed" } });
+    expect(await call.used()).toBe(0);
   });
 
-  it("times out a job no reader picks up, and refunds it", async () => {
+  it("cancels a waiting job (the browser reads through the gateway instead), with a refund", async () => {
+    const { call } = setup();
+    const { body: job } = await call.convert();
+    expect(await call.job(job.jobId, job.viewToken, "DELETE")).toEqual({ ok: true });
+    expect(await call.job(job.jobId, job.viewToken)).toMatchObject({ status: "error", error: { code: "cancelled" } });
+    expect((await call.list()).body.jobs).toEqual([]);
+    expect((await call.claim(job.jobId)).status).toBe(409);
+    expect(await call.used()).toBe(0);
+  });
+
+  it("times out a job no reader picks up, with a refund", async () => {
     const { call, setClock } = setup();
     const { body: job } = await call.convert();
     setClock(new Date("2026-11-12T10:31:00Z"));
     expect(await call.job(job.jobId, job.viewToken)).toMatchObject({ status: "error", error: { code: "timeout" } });
-    expect((await call.quota()).quota.day.used).toBe(0);
+    expect(await call.used()).toBe(0);
   });
 
-  it("falls back to the owner's key when no reader claims the job in time", async () => {
-    const { deps, started, call, setClock } = setup({ PGN_FREE_READER: "local-then-api", PGN_OWNER_API_KEY: "sk-ant-owner" });
+  it("hides a job from anyone without its token", async () => {
+    const { call } = setup();
     const { body: job } = await call.convert();
-    expect(started).toHaveLength(0);
-    setClock(new Date("2026-11-12T10:01:00Z"));
-    expect((await call.job(job.jobId, job.viewToken)).reader).toBe("local");
-    setClock(new Date("2026-11-12T10:02:30Z"));
-    expect((await call.job(job.jobId, job.viewToken)).reader).toBe("api");
-    expect(started).toHaveLength(1);
-    expect((await call.list()).body.jobs).toEqual([]);
-    await runWorker(started[0], deps);
-    expect((await call.job(job.jobId, job.viewToken)).status).toBe("done");
+    expect(await call.job(job.jobId, "nope")).toMatchObject({ error: { code: "not_found" } });
   });
 
-  it("still reads own-key jobs with the API right away", async () => {
-    const { started, call } = setup();
-    const { status } = await call.convert("own-key", { "x-anthropic-key": "sk-ant-visitor" });
-    expect(status).toBe(202);
-    expect(started).toHaveLength(1);
-    expect((await call.list()).body.jobs).toEqual([]);
+  it("validates photos", async () => {
+    const { call } = setup();
+    const cases: [unknown[], string][] = [
+      [[], "no_images"],
+      [[{ mediaType: "image/tiff", data: PNG }], "bad_image"],
+      [Array(3).fill({ mediaType: "image/png", data: PNG }), "too_many_images"],
+    ];
+    for (const [images, code] of cases) expect((await call.convert("alice", images)).body.error.code).toBe(code);
   });
 
-  it("refuses the worker endpoints without the token, or when no token is set", async () => {
+  it("refuses the worker endpoints without the token", async () => {
     const { call } = setup();
     expect((await call.list("wrong")).status).toBe(401);
-    const off = setup({ PGN_WORKER_TOKEN: "" });
-    expect((await off.call.list(TOKEN)).status).toBe(401);
   });
 
-  it("offers no free conversions with a local reader but no worker token", async () => {
-    const { call } = setup({ PGN_WORKER_TOKEN: "" });
-    expect((await call.quota()).freeAvailable).toBe(false);
-    expect((await call.convert()).status).toBe(503);
+  it("cleans up day-old jobs and finished counters", async () => {
+    const { deps, call, setClock } = setup();
+    await call.convert();
+    setClock(new Date("2026-11-13T11:00:00Z"));
+    expect(await cleanupJobs(deps)).toBe(1);
+    expect(await deps.jobs.list("")).toEqual([]);
+    setClock(new Date("2026-11-24T10:00:00Z"));
+    expect(await cleanupQuota(deps)).toBe(3);
   });
 });

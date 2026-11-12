@@ -25,3 +25,7 @@
 2026-11-12 [code] HintWise footer embedded byte for byte in index.html (sha256 test), HintWise favicon, docs renamed photo2pgn after the repo rename.
 
 2026-11-12 [code] Shifted sheets: engine can leave a cell out or insert a missing move before it when the reading does not fit; edits "-" and "e5 Nf6"; PGN numbered by the game. Done on the 15-min default (owner unanswered).
+
+2026-11-12 [decision] Owner yes to the platform rules: owner key only via the HintWise gateway, BYOK browser-direct, CLI reader kept for signed-in users with photos deleted once read.
+
+2026-11-12 [code] Reading moved to the browser (template llm.ts, record_scoresheet tool); server reduced to the CLI queue with Supabase sign-in check; template sign-in and account deletion; ESLint, coverage, Playwright.

@@ -1,7 +1,7 @@
-// The transcription instructions, used by the API reader and handed to the
+// The transcription instructions, used by the browser reader and handed to the
 // local CLI reader, so both read sheets the same way.
 import { z } from "zod";
-import { ExtractionSchema } from "../../src/lib/schema";
+import { ExtractionSchema } from "./schema";
 
 export const SYSTEM_PROMPT = `You transcribe photographs of chess scoresheets: the forms players fill in by hand during over-the-board tournament games. Your transcription is checked move by move for legality by a chess engine and then reviewed by a person, so faithful reading matters more than a tidy result.
 
@@ -25,6 +25,7 @@ export function userText(pages: number): string {
 
 /** JSON Schema for the answer, for readers that take a plain schema (claude --json-schema). */
 export function extractionJsonSchema(): Record<string, unknown> {
-  const { $schema: _drop, ...schema } = z.toJSONSchema(ExtractionSchema) as Record<string, unknown>;
+  const schema = { ...(z.toJSONSchema(ExtractionSchema) as Record<string, unknown>) };
+  delete schema.$schema;
   return schema;
 }

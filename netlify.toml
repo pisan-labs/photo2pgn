@@ -1,18 +1,20 @@
 [build]
-  command = "npm run build"
+  command = "npm ci && npm run build"
   publish = "dist"
 
+# Public values only (the anon key is public by design). The owner's
+# Anthropic key never goes here: it is used only through the HintWise gateway.
 [build.environment]
   NODE_VERSION = "22"
+  VITE_SUPABASE_URL = "https://auth.hintwise.org"
+  VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFya3R4bHJseWNlZmZ5b3pkd2hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODEwMTAsImV4cCI6MjA5MjQ1NzAxMH0.Vuku-irT3kAHZYibK23q6dpyOEqV_Eg5zB78I3dyshE"
+  # Free readings: "gateway" (default), "local" (the owner's CLI reader) or
+  # "local-then-gateway" (CLI first, gateway after VITE_LOCAL_FALLBACK_SECONDS).
+  VITE_FREE_READER = "gateway"
+  VITE_LOCAL_FALLBACK_SECONDS = "120"
 
 [functions]
   node_bundler = "esbuild"
-
-# Single-page app: unknown paths serve the app.
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
 
 [[headers]]
   for = "/*"

@@ -1,23 +1,14 @@
-// Vite dev-server plugin: serves /api/* from the same handlers the Netlify
-// functions use, with an in-memory store and the worker run in-process.
-// MOCK_CLAUDE=1 answers with the demo game after a short wait, so the whole
-// flow can be tried without an API key or any cost.
+// Vite dev-server plugin: serves /api/* (the CLI reader queue) from the same
+// handlers the Netlify functions use, with an in-memory store.
+//
+// Sign-in only works on https://photo2pgn.hintwise.org, so locally the queue
+// accepts the bearer token "dev" as one test user when PGN_DEV_USER is set.
 import type { Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadConfig } from "../netlify/lib/config";
 import { memoryKV } from "../netlify/lib/kv";
-import { readScoresheet } from "../netlify/lib/claude";
-import {
-  handleConvert,
-  handleJob,
-  handleQuota,
-  handleWorkerClaim,
-  handleWorkerList,
-  handleWorkerResult,
-  runWorker,
-  type Deps,
-} from "../netlify/lib/handlers";
-import { DEMO_EXTRACTION } from "../src/demo/sample";
+import { supabaseVerifier, type UserVerifier } from "../netlify/lib/auth";
+import { handleConvert, handleJob, handleWorkerClaim, handleWorkerList, handleWorkerResult, type Deps } from "../netlify/lib/handlers";
 
 async function toRequest(req: IncomingMessage): Promise<Request> {
   const chunks: Buffer[] = [];
@@ -45,10 +36,8 @@ export function apiListener(deps: Deps) {
     if (!url.startsWith("/api/")) return next();
     try {
       const request = await toRequest(req);
-      const ip = req.socket.remoteAddress;
       const path = new URL(request.url).pathname;
-      if (path === "/api/quota") return send(res, await handleQuota(request, ip, deps));
-      if (path === "/api/convert") return send(res, await handleConvert(request, ip, deps));
+      if (path === "/api/convert") return send(res, await handleConvert(request, deps));
       const m = /^\/api\/jobs\/([^/]+)$/.exec(path);
       if (m) return send(res, await handleJob(request, decodeURIComponent(m[1]), deps));
       if (path === "/api/worker/jobs") return send(res, await handleWorkerList(request, deps));
@@ -66,22 +55,11 @@ export function apiListener(deps: Deps) {
 }
 
 export function devApi(): Plugin {
-  const mock = process.env.MOCK_CLAUDE === "1";
-  const config = loadConfig({ ...process.env, ...(mock ? { PGN_OWNER_API_KEY: "sk-ant-mock-owner" } : {}) });
-  const deps: Deps = {
-    config,
-    jobs: memoryKV(),
-    quota: memoryKV(),
-    readScoresheet: mock
-      ? async () => {
-          await new Promise((r) => setTimeout(r, Number(process.env.MOCK_DELAY_MS ?? 3000)));
-          return { extraction: DEMO_EXTRACTION, usage: { inputTokens: 0, outputTokens: 0, model: "mock" } };
-        }
-      : readScoresheet,
-    startWorker: async (body) => {
-      setTimeout(() => void runWorker(body, deps), 0);
-    },
-  };
+  const config = loadConfig();
+  const devUser = process.env.PGN_DEV_USER;
+  const real = supabaseVerifier(config.supabaseUrl, config.supabaseAnonKey);
+  const verifyUser: UserVerifier = async (token) => (devUser && token === "dev" ? { id: devUser } : real(token));
+  const deps: Deps = { config, jobs: memoryKV(), quota: memoryKV(), verifyUser };
   return {
     name: "photo2pgn-dev-api",
     apply: "serve",

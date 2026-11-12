@@ -1,12 +1,17 @@
 import { useRef, useState } from "react";
 import { prepareImage, type PreparedImage } from "../lib/image";
-import type { Mode, QuotaInfo } from "../lib/api";
+import type { FreeReader } from "../lib/reading";
+
+export type Mode = "free" | "own-key";
 
 interface Props {
   pages: PreparedImage[];
   setPages: (p: PreparedImage[]) => void;
   maxPages: number;
-  quota: QuotaInfo | null;
+  signInAvailable: boolean;
+  signedIn: boolean;
+  onOpenSignIn: () => void;
+  freeReader: FreeReader;
   mode: Mode;
   setMode: (m: Mode) => void;
   apiKey: string;
@@ -14,14 +19,8 @@ interface Props {
   rememberKey: boolean;
   setRememberKey: (r: boolean) => void;
   error: string | null;
-  busy: boolean;
   onConvert: () => void;
   onDemo: () => void;
-}
-
-function resetText(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
 export function UploadPanel(p: Props) {
@@ -50,12 +49,13 @@ export function UploadPanel(p: Props) {
     }
   }
 
-  const q = p.quota?.quota;
-  const freeAvailable = Boolean(p.quota?.freeAvailable);
-  const freeLeft = q?.remaining ?? 0;
   const keyValid = /^sk-ant-\S{10,}$/.test(p.apiKey.trim());
-  const canConvert =
-    p.pages.length > 0 && !p.busy && !loading && (p.mode === "free" ? freeAvailable && freeLeft > 0 : keyValid);
+  const freeReady = p.signInAvailable && p.signedIn;
+  const canConvert = p.pages.length > 0 && !loading && (p.mode === "free" ? freeReady : keyValid);
+  const freeNote =
+    p.freeReader === "gateway"
+      ? "Read with HintWise's key, within a daily and weekly allowance."
+      : "Read by the HintWise reader; it can take a few minutes when it is busy.";
 
   return (
     <section className="panel upload" aria-labelledby="upload-title">
@@ -135,30 +135,23 @@ export function UploadPanel(p: Props) {
       </div>
       {fileError && <p className="error">{fileError}</p>}
 
-      <h2>2. Choose how to pay for the reading</h2>
-      <div className="choices" role="radiogroup" aria-label="API key">
-        <label className={`choice${p.mode === "free" ? " selected" : ""}${freeAvailable ? "" : " disabled"}`}>
+      <h2>2. Choose how it is read</h2>
+      <div className="choices" role="radiogroup" aria-label="How it is read">
+        <label className={`choice${p.mode === "free" ? " selected" : ""}${p.signInAvailable ? "" : " disabled"}`}>
           <input
             type="radio"
             name="mode"
             checked={p.mode === "free"}
-            disabled={!freeAvailable}
+            disabled={!p.signInAvailable}
             onChange={() => p.setMode("free")}
           />
           <span>
-            <strong>Free conversion</strong>
-            {!p.quota && <small>Checking availability…</small>}
-            {p.quota && !freeAvailable && <small>Not available right now. Use your own key.</small>}
-            {q && (
-              <small>
-                {freeLeft > 0
-                  ? `${freeLeft} left (${q.day.limit - q.day.used} of ${q.day.limit} today, ${q.week.limit - q.week.used} of ${q.week.limit} this week).`
-                  : q.global.used >= q.global.limit
-                    ? `Used up for everyone today; resets ${resetText(q.dayResetsAt)}.`
-                    : q.week.used >= q.week.limit
-                      ? `This week's ${q.week.limit} are used; resets ${resetText(q.weekResetsAt)}.`
-                      : `Today's ${q.day.limit} are used; resets ${resetText(q.dayResetsAt)}.`}
-              </small>
+            <strong>Free, with a HintWise account</strong>
+            {p.signInAvailable ? <small>{freeNote}</small> : <small>Not available in this preview. Use your own key.</small>}
+            {p.signInAvailable && !p.signedIn && p.mode === "free" && (
+              <button type="button" className="small" onClick={p.onOpenSignIn}>
+                Sign in
+              </button>
             )}
           </span>
         </label>
@@ -166,7 +159,7 @@ export function UploadPanel(p: Props) {
           <input type="radio" name="mode" checked={p.mode === "own-key"} onChange={() => p.setMode("own-key")} />
           <span>
             <strong>My own Anthropic API key</strong>
-            <small>No limits here; Anthropic bills your account, roughly 10 to 20 cents a sheet.</small>
+            <small>No account and no allowance; Anthropic bills your account, a few cents a sheet.</small>
           </span>
         </label>
       </div>
@@ -187,7 +180,7 @@ export function UploadPanel(p: Props) {
             Remember on this device
           </label>
           <p className="hint">
-            The key goes with this request to Anthropic through our server and is never stored there. Get one at{" "}
+            Your key goes only from this browser to Anthropic; HintWise never sees it. Get one at{" "}
             <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
               console.anthropic.com
             </a>

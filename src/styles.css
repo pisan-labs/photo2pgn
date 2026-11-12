@@ -761,3 +761,23 @@ table.moves {
   font-size: 0.8em;
   color: var(--fixed-line);
 }
+
+.signin-wrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+  max-width: 480px;
+  margin-left: auto;
+}
+
+.signin-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  flex: 1;
+}
+
+.choice .small {
+  margin-top: 8px;
+}

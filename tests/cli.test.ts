@@ -15,15 +15,10 @@ const TOKEN = "cli-test-token";
 let server: Server;
 let site = "";
 const deps: Deps = {
-  config: loadConfig({ PGN_FREE_READER: "local", PGN_WORKER_TOKEN: TOKEN }),
+  config: loadConfig({ PGN_WORKER_TOKEN: TOKEN, PGN_READER_PER_DAY: "50" }),
   jobs: memoryKV(),
   quota: memoryKV(),
-  startWorker: async () => {
-    throw new Error("the API worker must not run for local jobs");
-  },
-  readScoresheet: async () => {
-    throw new Error("unused");
-  },
+  verifyUser: async (t) => (t === "visitor-session" ? { id: "visitor" } : null),
 };
 
 beforeAll(async () => {
@@ -37,8 +32,8 @@ afterAll(() => server?.close());
 async function submit(pages = 1) {
   const res = await fetch(`${site}/api/convert`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "free", images: Array(pages).fill({ mediaType: "image/png", data: btoa("png") }) }),
+    headers: { "content-type": "application/json", authorization: "Bearer visitor-session" },
+    body: JSON.stringify({ images: Array(pages).fill({ mediaType: "image/png", data: btoa("png") }) }),
   });
   expect(res.status).toBe(202);
   return (await res.json()) as { jobId: string; viewToken: string };

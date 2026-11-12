@@ -5,7 +5,7 @@ import { handleWorkerClaim, handleWorkerList, handleWorkerResult } from "../lib/
 import { netlifyDeps } from "../lib/netlify-deps";
 
 export default async (req: Request, context: Context) => {
-  const deps = netlifyDeps(req);
+  const deps = netlifyDeps();
   const path = new URL(req.url).pathname;
   if (path === "/api/worker/jobs" && req.method === "GET") return handleWorkerList(req, deps);
   if (path.endsWith("/claim") && req.method === "POST") return handleWorkerClaim(req, context.params.id, deps);

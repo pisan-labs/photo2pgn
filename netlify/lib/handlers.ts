@@ -1,42 +1,38 @@
-// Request handling for the conversion API, independent of the Netlify
-// runtime so it can be tested and run in the local dev server.
+// The queue for the owner's CLI reader, independent of the Netlify runtime so
+// it can be tested and run in the local dev server.
 //
-// Flow: POST /api/convert stores the photos and a job record, takes one free
-// conversion if the owner's key is used, and starts the background worker.
-// The worker calls Claude (which can take minutes) and writes the result to
-// the job. The browser polls GET /api/jobs/:id until it is done.
-//
-// With a local reader (PGN_FREE_READER=local or local-then-api), free jobs
-// are not given to the background worker. They wait in a queue that the
-// owner's CLI (cli/pgn-worker.mjs) lists, claims, reads with a local Claude
-// Code, and answers through the /api/worker/* endpoints below.
+// A signed-in visitor posts their photos (POST /api/convert). They wait here,
+// in Netlify Blobs, until the owner's CLI (cli/pgn-worker.mjs) lists and
+// claims the job, reads it with a local Claude Code on the owner's
+// subscription, and posts the reading back (/api/worker/*). The browser polls
+// GET /api/jobs/:id, and may cancel (DELETE) to read through the HintWise
+// gateway instead. Photos are deleted once the job finishes, and jobs after
+// a day. No Anthropic key is involved anywhere on this side.
 import type { AppConfig } from "./config";
 import type { KV } from "./kv";
-import { identify, sha256Hex, type Identity, type UserVerifier } from "./identity";
-import { dayKey, getQuota, release, reserve, weekKey, type QuotaStatus } from "./quota";
-import { ReadError, type ImageInput, type ReadResult } from "./claude";
+import { sha256Hex, userFrom, type UserVerifier } from "./auth";
+import { dayKey, release, reserve, weekKey } from "./quota";
 import { ExtractionSchema, type Extraction } from "../../src/lib/schema";
-import { SYSTEM_PROMPT, extractionJsonSchema, userText } from "./prompt";
+import { SYSTEM_PROMPT, extractionJsonSchema, userText } from "../../src/lib/prompt";
 
-export type Mode = "free" | "own-key";
-export type Reader = "api" | "local";
+export interface ImageInput {
+  mediaType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+  data: string; // base64
+}
 
 export interface Job {
   id: string;
   status: "queued" | "running" | "done" | "error";
-  mode: Mode;
-  reader: Reader;
+  identity: string; // user:<HintWise user id>
   lease?: { workerId: string; until: string; tokenHash: string };
-  attempts?: number; // local reads that failed and were put back in the queue
-  identity: string;
+  attempts?: number; // reads that failed and were put back in the queue
   createdAt: string;
   updatedAt: string;
-  reservedAt: string | null; // set when a free conversion was taken
+  reservedAt: string; // when the reading was counted against the caps
   viewTokenHash: string;
-  workerTokenHash: string;
   imageCount: number;
   result?: Extraction;
-  usage?: ReadResult["usage"];
+  usage?: { model: string; inputTokens: number; outputTokens: number };
   error?: { code: string; message: string };
 }
 
@@ -44,35 +40,17 @@ export interface Deps {
   config: AppConfig;
   jobs: KV;
   quota: KV;
+  verifyUser: UserVerifier;
   now?: () => Date;
-  verifyUser?: UserVerifier;
-  /** Start the worker for a job. Must not wait for the job to finish. */
-  startWorker: (body: WorkerRequest) => Promise<void>;
-  readScoresheet: (opts: {
-    apiKey: string;
-    model: string;
-    effort: AppConfig["effort"];
-    images: ImageInput[];
-    baseURL: string;
-  }) => Promise<ReadResult>;
-}
-
-export interface WorkerRequest {
-  jobId: string;
-  workerToken: string;
-  apiKey?: string; // the visitor's own key; passed through, never stored
 }
 
 const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
-// A job that has not finished in this long is treated as failed (the
-// background function limit is 15 minutes).
-const STALE_MS = 16 * 60 * 1000;
-const MAX_LOCAL_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 3;
 
-function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }
 
@@ -103,118 +81,69 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** Which reader a free conversion gets, or null if none is set up. */
-export function freeReaderFor(config: AppConfig): Reader | null {
-  if (config.limits.perDay <= 0) return null;
-  if (config.freeReader !== "api" && config.workerToken) return "local";
-  return config.ownerKey ? "api" : null;
-}
+const nowOf = (deps: Deps) => deps.now?.() ?? new Date();
 
-export function publicQuota(config: AppConfig, status: QuotaStatus | null, identity: Identity) {
-  return {
-    freeAvailable: freeReaderFor(config) !== null,
-    signedIn: identity.kind === "user",
-    quota: status,
-  };
-}
-
-/** GET /api/quota */
-export async function handleQuota(req: Request, ip: string | undefined, deps: Deps): Promise<Response> {
-  const identity = await identify(req, ip, deps.config.identitySalt, deps.verifyUser);
-  const status = freeReaderFor(deps.config)
-    ? await getQuota(deps.quota, identity.id, deps.config.limits, deps.now?.())
-    : null;
-  return json(200, publicQuota(deps.config, status, identity));
-}
-
-/** POST /api/convert */
-export async function handleConvert(req: Request, ip: string | undefined, deps: Deps): Promise<Response> {
+/** POST /api/convert: queue photos for the CLI reader. Needs a signed-in visitor. */
+export async function handleConvert(req: Request, deps: Deps): Promise<Response> {
   const { config } = deps;
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps);
   if (req.method !== "POST") return fail(405, "method", "Use POST.");
+  if (!config.workerToken) return fail(503, "reader_off", "The HintWise reader is not running.");
+  const user = await userFrom(req, deps.verifyUser);
+  if (!user) return fail(401, "sign_in", "Sign in to use the free reading.");
 
-  let body: { mode?: unknown; images?: unknown };
+  let body: { images?: unknown };
   try {
     body = await req.json();
   } catch {
     return fail(400, "bad_request", "The request body is not JSON.");
   }
-  const mode = body.mode === "own-key" ? "own-key" : body.mode === "free" ? "free" : null;
-  if (!mode) return fail(400, "bad_request", 'mode must be "free" or "own-key".');
-
   const images = Array.isArray(body.images) ? (body.images as ImageInput[]) : [];
   if (images.length === 0) return fail(400, "no_images", "Add a photo of the scoresheet.");
-  if (images.length > config.maxImages) {
-    return fail(400, "too_many_images", `At most ${config.maxImages} photos per game.`);
-  }
+  if (images.length > config.maxImages) return fail(400, "too_many_images", `At most ${config.maxImages} photos per game.`);
   for (const img of images) {
     if (!img || typeof img.data !== "string" || !MEDIA_TYPES.has(img.mediaType)) {
       return fail(400, "bad_image", "Photos must be JPEG, PNG, WebP or GIF.");
     }
-    if (base64Size(img.data) > config.maxImageBytes) {
-      return fail(413, "image_too_large", "A photo is too large. Try a smaller one.");
-    }
+    if (base64Size(img.data) > config.maxImageBytes) return fail(413, "image_too_large", "A photo is too large.");
   }
 
-  let apiKey: string | undefined;
-  if (mode === "own-key") {
-    apiKey = req.headers.get("x-anthropic-key")?.trim();
-    if (!apiKey || !apiKey.startsWith("sk-ant-")) {
-      return fail(400, "bad_key", "Enter an Anthropic API key (it starts with sk-ant-).");
-    }
-  }
-  const reader: Reader | null = mode === "own-key" ? "api" : freeReaderFor(config);
-  if (!reader) return fail(503, "free_unavailable", "Free conversions are not available. Use your own API key.");
-
-  const identity = await identify(req, ip, config.identitySalt, deps.verifyUser);
-  let reservedAt: string | null = null;
-  if (mode === "free") {
-    const r = await reserve(deps.quota, identity.id, config.limits, now);
-    const quota = await getQuota(deps.quota, identity.id, config.limits, now);
-    if (!r.ok) {
-      const message =
-        r.denied === "global"
-          ? "Today's free conversions are used up for everyone. Use your own API key, or try again tomorrow."
-          : r.denied === "day"
-            ? `You have used today's ${config.limits.perDay} free conversions. Use your own API key, or try again tomorrow.`
-            : `You have used this week's ${config.limits.perWeek} free conversions. Use your own API key, or try again next week.`;
-      return fail(429, `limit_${r.denied}`, message, { quota });
-    }
-    reservedAt = now.toISOString();
+  const identity = `user:${user.id}`;
+  const r = await reserve(deps.quota, identity, config.limits, now);
+  if (!r.ok) {
+    const message =
+      r.denied === "global"
+        ? "The HintWise reader has done all it can for today. Try again tomorrow, or use your own API key."
+        : r.denied === "day"
+          ? `You have used today's ${config.limits.perDay} readings. Try again tomorrow, or use your own API key.`
+          : `You have used this week's ${config.limits.perWeek} readings. Try again next week, or use your own API key.`;
+    return fail(429, `limit_${r.denied}`, message);
   }
 
   const id = crypto.randomUUID();
   const viewToken = randomToken();
-  const workerToken = randomToken();
   const job: Job = {
     id,
     status: "queued",
-    mode,
-    reader,
-    identity: identity.id,
+    identity,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    reservedAt,
+    reservedAt: now.toISOString(),
     viewTokenHash: await sha256Hex(viewToken),
-    workerTokenHash: await sha256Hex(workerToken),
     imageCount: images.length,
   };
-
   try {
     await Promise.all(
       images.map((img, n) => deps.jobs.setBytes(`img/${id}/${n}`, decodeBase64(img.data), { mediaType: img.mediaType })),
     );
     await deps.jobs.setJSON(`job/${id}`, job);
-    if (reader === "local") await deps.jobs.setJSON(`queue/${id}`, { createdAt: job.createdAt });
-    else await deps.startWorker({ jobId: id, workerToken, apiKey });
+    await deps.jobs.setJSON(`queue/${id}`, { createdAt: job.createdAt });
   } catch (err) {
-    console.error("convert: could not start job", id, err instanceof Error ? err.message : err);
-    await finishJob(deps, job, { status: "error", error: { code: "start_failed", message: "Could not start the conversion. Try again." } });
-    return fail(502, "start_failed", "Could not start the conversion. Try again.");
+    console.error("convert: could not queue", id, err instanceof Error ? err.message : err);
+    await finishJob(deps, job, { status: "error", error: { code: "start_failed", message: "Could not queue the photos." } });
+    return fail(502, "start_failed", "Could not queue the photos. Try again.");
   }
-
-  const quota = mode === "free" ? await getQuota(deps.quota, identity.id, config.limits, now) : null;
-  return json(202, { jobId: id, viewToken, quota });
+  return json(202, { jobId: id, viewToken });
 }
 
 async function deleteImages(deps: Deps, job: Job) {
@@ -222,118 +151,52 @@ async function deleteImages(deps: Deps, job: Job) {
 }
 
 /**
- * Move a job to done or error, exactly once. A failed free conversion is
- * given back. Photos are deleted either way.
+ * Move a job to done or error, exactly once. A failed or cancelled reading
+ * is given back to the person's allowance. Photos are deleted either way.
  */
-async function finishJob(deps: Deps, job: Job, patch: Pick<Job, "status"> & Partial<Job>): Promise<void> {
-  const now = (deps.now?.() ?? new Date()).toISOString();
+async function finishJob(deps: Deps, job: Job, patch: Pick<Job, "status"> & Partial<Job>): Promise<boolean> {
+  const now = nowOf(deps).toISOString();
   for (let attempt = 0; attempt < 5; attempt++) {
     const cur = await deps.jobs.getJSON<Job>(`job/${job.id}`);
-    if (cur && (cur.value.status === "done" || cur.value.status === "error")) return;
+    if (cur && (cur.value.status === "done" || cur.value.status === "error")) return false;
     const next = { ...(cur?.value ?? job), ...patch, updatedAt: now };
     const ok = cur
       ? await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfMatch: cur.etag })
       : await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfNew: true });
     if (!ok) continue;
-    if (patch.status === "error" && next.reservedAt) {
-      await release(deps.quota, next.identity, new Date(next.reservedAt));
-    }
+    if (patch.status === "error") await release(deps.quota, next.identity, new Date(next.reservedAt));
     await deleteImages(deps, next);
     await deps.jobs.delete(`queue/${job.id}`);
-    return;
+    return true;
   }
+  return false;
 }
 
-/** The background worker: read the photos with Claude and store the result. */
-export async function runWorker(body: WorkerRequest, deps: Deps): Promise<void> {
-  const entry = await deps.jobs.getJSON<Job>(`job/${body.jobId}`);
-  if (!entry) return;
-  const job = entry.value;
-  if (job.workerTokenHash !== (await sha256Hex(body.workerToken ?? ""))) {
-    console.error("worker: bad token for job", job.id);
-    return;
-  }
-  if (job.status !== "queued") return; // a retry of a job already handled
-  if ((job.reader ?? "api") !== "api") return; // waiting for the CLI reader
-
-  const claimed = await deps.jobs.setJSON(
-    `job/${job.id}`,
-    { ...job, status: "running", updatedAt: (deps.now?.() ?? new Date()).toISOString() },
-    { onlyIfMatch: entry.etag },
-  );
-  if (!claimed) return;
-
-  const apiKey = job.mode === "own-key" ? body.apiKey : deps.config.ownerKey;
-  try {
-    if (!apiKey) throw new ReadError("bad_key", "No API key for this conversion.");
-    const images: ImageInput[] = [];
-    for (let n = 0; n < job.imageCount; n++) {
-      const img = await deps.jobs.getBytes(`img/${job.id}/${n}`);
-      if (!img) throw new Error(`photo ${n} is missing`);
-      images.push({ mediaType: img.metadata.mediaType as ImageInput["mediaType"], data: encodeBase64(img.data) });
-    }
-    const { model, effort, anthropicBaseURL: baseURL } = deps.config;
-    const result = await deps.readScoresheet({ apiKey, model, effort, images, baseURL });
-    console.log("worker: done", job.id, job.mode, result.usage);
-    await finishJob(deps, job, { status: "done", result: result.extraction, usage: result.usage });
-  } catch (err) {
-    const error =
-      err instanceof ReadError
-        ? { code: err.code, message: err.message }
-        : { code: "internal", message: "Something went wrong while reading the photo." };
-    console.error("worker: failed", job.id, error.code, err instanceof Error ? err.message : err);
-    await finishJob(deps, job, { status: "error", error });
-  }
-}
-
-/**
- * A free job queued for the CLI reader that has waited past the fallback
- * time goes to the owner's key instead (local-then-api only).
- */
-async function maybeFallBack(deps: Deps, entry: { value: Job; etag: string }, now: Date): Promise<boolean> {
-  const { config } = deps;
-  const job = entry.value;
-  if (config.freeReader !== "local-then-api" || !config.ownerKey) return false;
-  if (job.reader !== "local" || job.status !== "queued") return false;
-  if (now.getTime() - new Date(job.createdAt).getTime() < config.localFallbackMs) return false;
-  const workerToken = randomToken();
-  const next: Job = { ...job, reader: "api", workerTokenHash: await sha256Hex(workerToken), updatedAt: now.toISOString() };
-  if (!(await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfMatch: entry.etag }))) return false;
-  await deps.jobs.delete(`queue/${job.id}`);
-  console.log("job: no local reader in time; using the owner's key", job.id);
-  try {
-    await deps.startWorker({ jobId: job.id, workerToken });
-  } catch (err) {
-    console.error("job: fallback worker did not start", job.id, err instanceof Error ? err.message : err);
-    await finishJob(deps, next, { status: "error", error: { code: "start_failed", message: "Could not start the conversion. Try again." } });
-  }
-  return true;
-}
-
-/** GET /api/jobs/:id?token=... */
-export async function handleJob(req: Request, id: string | undefined, deps: Deps): Promise<Response> {
+async function viewable(req: Request, id: string | undefined, deps: Deps) {
   const token = new URL(req.url).searchParams.get("token") ?? "";
-  if (!id) return fail(404, "not_found", "No such conversion.");
-  let entry = await deps.jobs.getJSON<Job>(`job/${id}`);
-  if (!entry || entry.value.viewTokenHash !== (await sha256Hex(token))) {
-    return fail(404, "not_found", "No such conversion.");
-  }
-  const now = deps.now?.() ?? new Date();
-  if (await maybeFallBack(deps, entry, now)) entry = (await deps.jobs.getJSON<Job>(`job/${id}`)) ?? entry;
+  const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
+  if (!entry || entry.value.viewTokenHash !== (await sha256Hex(token))) return null;
+  return entry;
+}
 
+/** GET /api/jobs/:id?token=...  and  DELETE (cancel) */
+export async function handleJob(req: Request, id: string | undefined, deps: Deps): Promise<Response> {
+  const entry = await viewable(req, id, deps);
+  if (!entry) return fail(404, "not_found", "No such reading.");
   let job = entry.value;
-  const pending = job.status === "queued" || job.status === "running";
-  const local = (job.reader ?? "api") === "local";
-  const age = now.getTime() - new Date(local ? job.createdAt : job.updatedAt).getTime();
-  const limit = local ? deps.config.localTimeoutMs : STALE_MS;
-  if (pending && age > limit) {
-    const message = local
-      ? "No reader picked up this conversion in time. Try again later, or use your own API key."
-      : "The conversion took too long. Try again.";
-    await finishJob(deps, job, { status: "error", error: { code: "timeout", message } });
-    job = (await deps.jobs.getJSON<Job>(`job/${id}`))?.value ?? job;
+
+  if (req.method === "DELETE") {
+    await finishJob(deps, job, { status: "error", error: { code: "cancelled", message: "Cancelled." } });
+    return json(200, { ok: true });
   }
-  return json(200, { id: job.id, status: job.status, reader: job.reader ?? "api", result: job.result, error: job.error });
+
+  const pending = job.status === "queued" || job.status === "running";
+  if (pending && nowOf(deps).getTime() - new Date(job.createdAt).getTime() > deps.config.localTimeoutMs) {
+    const message = "No reader picked up these photos in time. Try again later, or use your own API key.";
+    await finishJob(deps, job, { status: "error", error: { code: "timeout", message } });
+    job = (await deps.jobs.getJSON<Job>(`job/${job.id}`))?.value ?? job;
+  }
+  return json(200, { id: job.id, status: job.status, result: job.result, error: job.error });
 }
 
 // ---- CLI reader endpoints (Authorization: Bearer PGN_WORKER_TOKEN) ----
@@ -350,17 +213,19 @@ function leaseLive(job: Job, now: Date): boolean {
   return Boolean(job.lease && new Date(job.lease.until).getTime() > now.getTime());
 }
 
+function open(job: Job, now: Date): boolean {
+  return job.status === "queued" || (job.status === "running" && !leaseLive(job, now));
+}
+
 /** GET /api/worker/jobs: jobs waiting for the CLI reader, oldest first. */
 export async function handleWorkerList(req: Request, deps: Deps): Promise<Response> {
   if (!(await workerAuthorized(req, deps.config))) return fail(401, "unauthorized", "Bad or missing worker token.");
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps);
   const jobs: { id: string; createdAt: string; imageCount: number; attempts: number }[] = [];
   for (const key of await deps.jobs.list("queue/")) {
     const id = key.slice("queue/".length);
     const job = (await deps.jobs.getJSON<Job>(`job/${id}`))?.value;
-    if (!job || job.reader !== "local") continue;
-    const open = job.status === "queued" || (job.status === "running" && !leaseLive(job, now));
-    if (open) jobs.push({ id, createdAt: job.createdAt, imageCount: job.imageCount, attempts: job.attempts ?? 0 });
+    if (job && open(job, now)) jobs.push({ id, createdAt: job.createdAt, imageCount: job.imageCount, attempts: job.attempts ?? 0 });
   }
   jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return json(200, { jobs });
@@ -371,19 +236,14 @@ export async function handleWorkerClaim(req: Request, id: string | undefined, de
   if (!(await workerAuthorized(req, deps.config))) return fail(401, "unauthorized", "Bad or missing worker token.");
   const body = (await req.json().catch(() => ({}))) as { workerId?: unknown };
   const workerId = typeof body.workerId === "string" ? body.workerId.slice(0, 80) : "cli";
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps);
   const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
-  if (!entry || entry.value.reader !== "local") return fail(404, "not_found", "No such job in the queue.");
+  if (!entry) return fail(404, "not_found", "No such job in the queue.");
   const job = entry.value;
-  const open = job.status === "queued" || (job.status === "running" && !leaseLive(job, now));
-  if (!open) return fail(409, "taken", "This job is already being read or is finished.");
+  if (!open(job, now)) return fail(409, "taken", "This job is already being read or is finished.");
 
   const leaseToken = randomToken();
-  const lease = {
-    workerId,
-    until: new Date(now.getTime() + deps.config.leaseMs).toISOString(),
-    tokenHash: await sha256Hex(leaseToken),
-  };
+  const lease = { workerId, until: new Date(now.getTime() + deps.config.leaseMs).toISOString(), tokenHash: await sha256Hex(leaseToken) };
   const next: Job = { ...job, status: "running", lease, updatedAt: now.toISOString() };
   if (!(await deps.jobs.setJSON(`job/${job.id}`, next, { onlyIfMatch: entry.etag }))) {
     return fail(409, "taken", "Another reader claimed this job first.");
@@ -423,17 +283,17 @@ export async function handleWorkerResult(req: Request, id: string | undefined, d
     usage?: { model?: string; inputTokens?: number; outputTokens?: number };
   } | null;
   if (!body) return fail(400, "bad_request", "The request body is not JSON.");
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps);
   const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
-  if (!entry || entry.value.reader !== "local") return fail(404, "not_found", "No such job.");
+  if (!entry) return fail(404, "not_found", "No such job.");
   const job = entry.value;
   if (job.status !== "running" || !job.lease || job.lease.tokenHash !== (await sha256Hex(body.leaseToken ?? ""))) {
-    return fail(409, "not_leased", "This job is not leased to you (it may have expired and been reclaimed).");
+    return fail(409, "not_leased", "This job is not leased to you (it may have expired, been reclaimed or cancelled).");
   }
 
   if (body.error) {
     const attempts = (job.attempts ?? 0) + 1;
-    if (body.retry && attempts < MAX_LOCAL_ATTEMPTS) {
+    if (body.retry && attempts < MAX_ATTEMPTS) {
       const back: Job = { ...job, status: "queued", lease: undefined, attempts, updatedAt: now.toISOString() };
       if (!(await deps.jobs.setJSON(`job/${job.id}`, back, { onlyIfMatch: entry.etag }))) return fail(409, "conflict", "Try again.");
       return json(200, { ok: true, requeued: true });
@@ -461,18 +321,16 @@ export async function handleWorkerResult(req: Request, id: string | undefined, d
 
 /** Delete usage counters for days and weeks that are over. */
 export async function cleanupQuota(deps: Deps): Promise<number> {
-  const now = deps.now?.() ?? new Date();
-  const today = dayKey(now);
-  const thisWeek = weekKey(now);
+  const now = nowOf(deps);
   let removed = 0;
   for (const prefix of ["day/", "global/", "week/"]) {
+    const keep =
+      prefix === "week/"
+        ? [weekKey(now), weekKey(new Date(now.getTime() - 7 * 86_400_000))]
+        : [dayKey(now), dayKey(new Date(now.getTime() - 86_400_000))];
     for (const key of await deps.quota.list(prefix)) {
       const period = key.split("/")[1] ?? "";
-      const current = prefix === "week/" ? thisWeek : today;
-      // Keep the current and the previous period (a request near midnight).
-      if (period >= current) continue;
-      const prev = prefix === "week/" ? weekKey(new Date(now.getTime() - 7 * 86_400_000)) : dayKey(new Date(now.getTime() - 86_400_000));
-      if (period >= prev) continue;
+      if (period >= keep[1]) continue; // the current and the previous period stay
       await deps.quota.delete(key);
       removed++;
     }
@@ -482,12 +340,13 @@ export async function cleanupQuota(deps: Deps): Promise<number> {
 
 /** Delete jobs older than a day. Returns how many were removed. */
 export async function cleanupJobs(deps: Deps, maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
-  const now = (deps.now?.() ?? new Date()).getTime();
+  const now = nowOf(deps).getTime();
   let removed = 0;
   for (const key of await deps.jobs.list("job/")) {
     const job = (await deps.jobs.getJSON<Job>(key))?.value;
     if (!job || now - new Date(job.createdAt).getTime() < maxAgeMs) continue;
     await deleteImages(deps, job);
+    await deps.jobs.delete(`queue/${job.id}`);
     await deps.jobs.delete(key);
     removed++;
   }

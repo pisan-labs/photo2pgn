@@ -564,7 +564,9 @@ function search(ctx: Ctx, start: string): { choices: Candidate[]; stoppedAt: num
 
   for (let i = 0; i < n && beam.length; i++) {
     const before = beam[0];
-    let { next, width } = step(ctx, beam, i);
+    const stepped = step(ctx, beam, i);
+    const width = stepped.width;
+    let next = stepped.next;
     // Never rewrite earlier moves to make the person's own entry fit: if it
     // is not legal, say so at that move.
     const trouble = next.length === 0 || next[0].cost - before.cost >= TROUBLE;

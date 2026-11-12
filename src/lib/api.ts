@@ -1,99 +1,87 @@
-// Browser side of the conversion API.
+// Browser side of the queue for the HintWise reader (the owner's CLI).
 import type { Extraction } from "./schema";
-
-export interface Counter {
-  used: number;
-  limit: number;
-}
-
-export interface QuotaStatus {
-  day: Counter;
-  week: Counter;
-  global: Counter;
-  remaining: number;
-  dayResetsAt: string;
-  weekResetsAt: string;
-}
-
-export interface QuotaInfo {
-  freeAvailable: boolean;
-  signedIn: boolean;
-  quota: QuotaStatus | null;
-}
+import type { PhotoInput } from "./read";
 
 export class ApiError extends Error {
   constructor(
     public code: string,
     message: string,
-    public quota?: QuotaStatus,
   ) {
     super(message);
+    this.name = "ApiError";
   }
 }
 
-export type Mode = "free" | "own-key";
+export interface QueuedJob {
+  jobId: string;
+  viewToken: string;
+}
 
-async function parse(res: Response): Promise<any> {
+async function parse(res: Response): Promise<Record<string, unknown>> {
   const text = await res.text();
   try {
-    return text ? JSON.parse(text) : {};
+    return text ? (JSON.parse(text) as Record<string, unknown>) : {};
   } catch {
     throw new ApiError("bad_response", `The server answered with HTTP ${res.status}.`);
   }
 }
 
-export async function fetchQuota(): Promise<QuotaInfo | null> {
-  try {
-    const res = await fetch("/api/quota", { headers: { accept: "application/json" } });
-    if (!res.ok) return null;
-    return (await parse(res)) as QuotaInfo;
-  } catch {
-    return null;
-  }
+function errorOf(body: Record<string, unknown>, status: number): ApiError {
+  const e = (body.error ?? {}) as { code?: string; message?: string };
+  return new ApiError(e.code ?? "error", e.message ?? `HTTP ${status}`);
 }
 
-export async function startConversion(
-  images: { mediaType: string; data: string }[],
-  mode: Mode,
-  apiKey?: string,
-): Promise<{ jobId: string; viewToken: string; quota: QuotaStatus | null }> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (mode === "own-key" && apiKey) headers["x-anthropic-key"] = apiKey;
+/** Queue photos for the HintWise reader; needs the visitor's session token. */
+export async function queueForReader(photos: PhotoInput[], token: string, doFetch: typeof fetch = fetch): Promise<QueuedJob> {
   let res: Response;
   try {
-    res = await fetch("/api/convert", { method: "POST", headers, body: JSON.stringify({ mode, images }) });
+    res = await doFetch("/api/convert", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ images: photos }),
+    });
   } catch {
     throw new ApiError("network", "Could not reach the server. Check your connection and try again.");
   }
   const body = await parse(res);
-  if (!res.ok) throw new ApiError(body.error?.code ?? "error", body.error?.message ?? `HTTP ${res.status}`, body.quota);
-  return body;
+  if (!res.ok) throw errorOf(body, res.status);
+  return body as unknown as QueuedJob;
 }
 
-export async function waitForJob(
-  jobId: string,
-  viewToken: string,
-  opts: {
-    signal?: AbortSignal;
-    intervalMs?: number;
-    timeoutMs?: number;
-    onStatus?: (s: { status: string; reader: "api" | "local" }) => void;
-  } = {},
-): Promise<Extraction> {
+export async function cancelJob(job: QueuedJob, doFetch: typeof fetch = fetch): Promise<void> {
+  const url = `/api/jobs/${encodeURIComponent(job.jobId)}?token=${encodeURIComponent(job.viewToken)}`;
+  await doFetch(url, { method: "DELETE" }).catch(() => undefined);
+}
+
+export interface WaitOptions {
+  signal?: AbortSignal;
+  intervalMs?: number;
+  timeoutMs?: number;
+  onStatus?: (status: string) => void;
+  fetch?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/** Poll a queued job until it is done. */
+export async function waitForJob(job: QueuedJob, opts: WaitOptions = {}): Promise<Extraction> {
+  const doFetch = opts.fetch ?? fetch;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
   const interval = opts.intervalMs ?? 2500;
-  // Local-reader jobs can wait up to 30 minutes in the queue on the server.
-  const deadline = Date.now() + (opts.timeoutMs ?? 47 * 60 * 1000);
+  // The server gives up on a job after 30 minutes in the queue.
+  const deadline = now() + (opts.timeoutMs ?? 32 * 60 * 1000);
+  const url = `/api/jobs/${encodeURIComponent(job.jobId)}?token=${encodeURIComponent(job.viewToken)}`;
   let failures = 0;
-  while (Date.now() < deadline) {
+  while (now() < deadline) {
     if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
-    await new Promise((r) => setTimeout(r, interval));
-    let body: any;
+    await sleep(interval);
+    if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
+    let body: Record<string, unknown>;
     try {
-      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}?token=${encodeURIComponent(viewToken)}`, {
-        signal: opts.signal,
-      });
+      const res = await doFetch(url, { signal: opts.signal });
       body = await parse(res);
-      if (!res.ok) throw new ApiError(body.error?.code ?? "error", body.error?.message ?? `HTTP ${res.status}`);
+      if (!res.ok) throw errorOf(body, res.status);
       failures = 0;
     } catch (err) {
       if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
@@ -101,9 +89,10 @@ export async function waitForJob(
       if (++failures >= 5) throw new ApiError("network", "Lost contact with the server.");
       continue;
     }
-    opts.onStatus?.({ status: body.status, reader: body.reader ?? "api" });
-    if (body.status === "done") return body.result as Extraction;
-    if (body.status === "error") throw new ApiError(body.error?.code ?? "error", body.error?.message ?? "Failed.");
+    const status = String(body.status);
+    opts.onStatus?.(status);
+    if (status === "done") return body.result as Extraction;
+    if (status === "error") throw errorOf(body, 200);
   }
-  throw new ApiError("timeout", "The conversion took too long.");
+  throw new ApiError("timeout", "The reading took too long.");
 }

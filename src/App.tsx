@@ -1,119 +1,135 @@
 import { useEffect, useRef, useState } from "react";
-import { UploadPanel } from "./components/UploadPanel";
+import { UploadPanel, type Mode } from "./components/UploadPanel";
 import { ReviewPanel, type ReviewSession } from "./components/ReviewPanel";
-import { ApiError, fetchQuota, startConversion, waitForJob, type Mode, type QuotaInfo } from "./lib/api";
-import type { PreparedImage } from "./lib/image";
+import { SignInPanel, useUser } from "./components/SignIn";
+import { fitPhotos, type PreparedImage } from "./lib/image";
+import { getByokKey, setByokKey } from "./lib/llm";
+import { currentToken } from "./lib/auth";
+import { ApiError, type QueuedJob } from "./lib/api";
+import { describeError, followQueued, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
 import { load, remove, save } from "./lib/storage";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
+import type { Extraction } from "./lib/schema";
 
-const KEY_STORAGE = "photo2pgn.apiKey";
 const SESSION_STORAGE = "photo2pgn.session";
 const PENDING_STORAGE = "photo2pgn.pending";
+const MAX_PAGES = 2;
+const FREE_READER = freeReaderFrom();
 
-interface PendingJob {
-  jobId: string;
-  viewToken: string;
+interface PendingJob extends QueuedJob {
   startedAt: number;
 }
-const MAX_PAGES = 2;
 
-type Phase =
-  | { kind: "upload" }
-  | { kind: "reading"; startedAt: number; waiting?: boolean }
-  | { kind: "review" };
+type View = { kind: "upload" } | { kind: "reading"; startedAt: number; phase: Phase } | { kind: "review" };
+
+function savedKey(): string {
+  try {
+    return getByokKey() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function pendingJob(): PendingJob | null {
+  const pending = load<PendingJob>(PENDING_STORAGE);
+  if (pending && Date.now() - pending.startedAt < 32 * 60 * 1000) return pending;
+  remove(PENDING_STORAGE);
+  return null;
+}
 
 export default function App() {
-  const [phase, setPhase] = useState<Phase>({ kind: "upload" });
+  const [signInOpen, setSignInOpen] = useState(false);
+  const { user, available: signInAvailable } = useUser(() => setSignInOpen(false));
+  const [resume] = useState(pendingJob);
+  const [view, setView] = useState<View>(() =>
+    resume ? { kind: "reading", startedAt: resume.startedAt, phase: "queued" } : { kind: "upload" },
+  );
   const [pages, setPages] = useState<PreparedImage[]>([]);
-  const [quota, setQuota] = useState<QuotaInfo | null>(null);
-  const [mode, setMode] = useState<Mode>("free");
-  const [apiKey, setApiKey] = useState(() => load<string>(KEY_STORAGE) ?? "");
-  const [rememberKey, setRememberKey] = useState(() => Boolean(load<string>(KEY_STORAGE)));
+  const [mode, setMode] = useState<Mode>(() => (signInAvailable && !savedKey() ? "free" : "own-key"));
+  const [apiKey, setApiKey] = useState(savedKey);
+  const [rememberKey, setRememberKey] = useState(() => Boolean(savedKey()));
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<ReviewSession | null>(null);
   const [saved] = useState(() => load<ReviewSession>(SESSION_STORAGE));
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    void fetchQuota().then((q) => {
-      setQuota(q ?? { freeAvailable: false, signedIn: false, quota: null });
-      if (!q?.freeAvailable || (q.quota && q.quota.remaining === 0) || load<string>(KEY_STORAGE)) setMode("own-key");
-    });
-  }, []);
-
-  useEffect(() => {
-    if (rememberKey && apiKey.trim()) save(KEY_STORAGE, apiKey.trim());
-    else remove(KEY_STORAGE);
+    try {
+      setByokKey(rememberKey && apiKey.trim() ? apiKey.trim() : null);
+    } catch {
+      // storage unavailable: the key lives only in this page
+    }
   }, [rememberKey, apiKey]);
 
   useEffect(() => {
     if (session) save(SESSION_STORAGE, { ...session, images: session.demo ? session.images : [] });
   }, [session]);
 
-  // A reload or a locked phone during the wait: pick the job up again.
+  function finished(extraction: Extraction, images: string[]) {
+    remove(PENDING_STORAGE);
+    setSession({ extraction, edits: {}, headers: extraction.headers, images, demo: false });
+    setView({ kind: "review" });
+  }
+
+  function failed(err: unknown) {
+    setView({ kind: "upload" });
+    if (err instanceof ApiError && err.code === "cancelled") return;
+    remove(PENDING_STORAGE);
+    const { message, ownKey } = describeError(err);
+    if (ownKey) setMode("own-key");
+    setError(message);
+  }
+
+  // A reload or a locked phone while queued for the HintWise reader: pick the job up again.
+  const following = useRef(false);
   useEffect(() => {
-    const pending = load<PendingJob>(PENDING_STORAGE);
-    if (pending && Date.now() - pending.startedAt < 47 * 60 * 1000) void follow(pending, []);
-    else remove(PENDING_STORAGE);
-  }, []);
+    if (!resume || following.current) return;
+    following.current = true;
+    const ctrl = new AbortController();
+    abort.current = ctrl;
+    const onPhase = (phase: Phase) => setView({ kind: "reading", startedAt: resume.startedAt, phase });
+    followQueued(resume, { mode: "free", reader: "local", signal: ctrl.signal, onPhase })
+      .then((ex) => {
+        remove(PENDING_STORAGE);
+        setSession({ extraction: ex, edits: {}, headers: ex.headers, images: [], demo: false });
+        setView({ kind: "review" });
+      })
+      .catch((err) => {
+        setView({ kind: "upload" });
+        remove(PENDING_STORAGE);
+        if (!(err instanceof ApiError && err.code === "cancelled")) setError(describeError(err).message);
+      });
+  }, [resume]);
 
   async function convert() {
     setError(null);
     const startedAt = Date.now();
-    setPhase({ kind: "reading", startedAt });
-    let job;
-    try {
-      job = await startConversion(
-        pages.map((p) => ({ mediaType: p.mediaType, data: p.data })),
-        mode,
-        apiKey.trim(),
-      );
-    } catch (err) {
-      return failed(err);
-    }
-    if (job.quota && quota) setQuota({ ...quota, quota: job.quota });
-    const pending = { jobId: job.jobId, viewToken: job.viewToken, startedAt };
-    save(PENDING_STORAGE, pending);
-    await follow(pending, pages.map((p) => p.previewUrl));
-  }
-
-  async function follow(pending: PendingJob, images: string[]) {
-    setPhase({ kind: "reading", startedAt: pending.startedAt });
     const ctrl = new AbortController();
     abort.current = ctrl;
+    setView({ kind: "reading", startedAt, phase: "reading" });
     try {
-      const extraction = await waitForJob(pending.jobId, pending.viewToken, {
-        signal: ctrl.signal,
-        onStatus: (s) =>
-          setPhase({ kind: "reading", startedAt: pending.startedAt, waiting: s.reader === "local" && s.status === "queued" }),
-      });
-      remove(PENDING_STORAGE);
-      setSession({ extraction, edits: {}, headers: extraction.headers, images, demo: false });
-      setPhase({ kind: "review" });
+      const photos = await fitPhotos(pages);
+      const extraction = await readPhotos(
+        photos.map((p) => ({ mediaType: p.mediaType, data: p.data })),
+        {
+          mode,
+          apiKey: apiKey.trim(),
+          reader: FREE_READER,
+          signal: ctrl.signal,
+          getToken: signInAvailable ? () => currentToken() : async () => null,
+          onPhase: (phase) => setView({ kind: "reading", startedAt, phase }),
+          onQueued: (job) => save(PENDING_STORAGE, { ...job, startedAt }),
+        },
+      );
+      finished(extraction, photos.map((p) => p.previewUrl));
     } catch (err) {
-      if (!(err instanceof ApiError && err.code === "cancelled")) remove(PENDING_STORAGE);
       failed(err);
     }
   }
 
-  function failed(err: unknown) {
-    setPhase({ kind: "upload" });
-    if (err instanceof ApiError && err.code === "cancelled") return;
-    if (err instanceof ApiError && err.quota && quota) setQuota({ ...quota, quota: err.quota });
-    if (err instanceof ApiError && err.code.startsWith("limit_")) setMode("own-key");
-    setError(err instanceof Error ? err.message : String(err));
-    void fetchQuota().then((q) => q && setQuota(q));
-  }
-
   function demo() {
-    setSession({
-      extraction: DEMO_EXTRACTION,
-      edits: {},
-      headers: DEMO_EXTRACTION.headers,
-      images: [DEMO_IMAGE_URL],
-      demo: true,
-    });
-    setPhase({ kind: "review" });
+    setSession({ extraction: DEMO_EXTRACTION, edits: {}, headers: DEMO_EXTRACTION.headers, images: [DEMO_IMAGE_URL], demo: true });
+    setView({ kind: "review" });
   }
 
   function startOver() {
@@ -121,7 +137,7 @@ export default function App() {
     remove(SESSION_STORAGE);
     setPages([]);
     setError(null);
-    setPhase({ kind: "upload" });
+    setView({ kind: "upload" });
   }
 
   return (
@@ -136,10 +152,16 @@ export default function App() {
             <small>Scoresheet photos to PGN files</small>
           </span>
         </a>
+        {signInAvailable && (
+          <button type="button" className="secondary small" onClick={() => setSignInOpen((o) => !o)} aria-expanded={signInOpen}>
+            {user ? (user.email ?? "Account") : "Sign in"}
+          </button>
+        )}
       </header>
+      <SignInPanel open={signInOpen} onClose={() => setSignInOpen(false)} />
 
       <main>
-        {phase.kind === "upload" && (
+        {view.kind === "upload" && (
           <>
             <p className="lede">
               Take a photo of a handwritten tournament scoresheet. Claude reads the moves, a chess engine checks each one
@@ -152,7 +174,7 @@ export default function App() {
                   className="link"
                   onClick={() => {
                     setSession(saved);
-                    setPhase({ kind: "review" });
+                    setView({ kind: "review" });
                   }}
                 >
                   Resume your last game ({saved.headers.white || "White"} vs {saved.headers.black || "Black"})
@@ -163,7 +185,10 @@ export default function App() {
               pages={pages}
               setPages={setPages}
               maxPages={MAX_PAGES}
-              quota={quota}
+              signInAvailable={signInAvailable}
+              signedIn={Boolean(user)}
+              onOpenSignIn={() => setSignInOpen(true)}
+              freeReader={FREE_READER}
               mode={mode}
               setMode={setMode}
               apiKey={apiKey}
@@ -171,33 +196,32 @@ export default function App() {
               rememberKey={rememberKey}
               setRememberKey={setRememberKey}
               error={error}
-              busy={false}
               onConvert={convert}
               onDemo={demo}
             />
           </>
         )}
 
-        {phase.kind === "reading" && (
+        {view.kind === "reading" && (
           <Reading
-            startedAt={phase.startedAt}
-            waiting={Boolean(phase.waiting)}
+            startedAt={view.startedAt}
+            phase={view.phase}
             pages={pages}
             onCancel={() => {
               remove(PENDING_STORAGE);
               abort.current?.abort();
+              setView({ kind: "upload" });
             }}
           />
         )}
 
-        {phase.kind === "review" && session && (
-          <ReviewPanel session={session} onChange={setSession} onStartOver={startOver} />
-        )}
+        {view.kind === "review" && session && <ReviewPanel session={session} onChange={setSession} onStartOver={startOver} />}
       </main>
 
       <footer className="foot">
         <p>
-          Photos are deleted from the server once they are read. Results stay in your browser.
+          Your photos go from this browser to Claude to be read, and are not kept. With the HintWise reader they wait on
+          our server until they are read, then are deleted. Your games stay in this browser.
         </p>
       </footer>
     </div>
@@ -206,30 +230,32 @@ export default function App() {
 
 function Reading({
   startedAt,
-  waiting,
+  phase,
   pages,
   onCancel,
 }: {
   startedAt: number;
-  waiting: boolean;
+  phase: Phase;
   pages: PreparedImage[];
   onCancel: () => void;
 }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
   const secs = Math.floor((now - startedAt) / 1000);
+  const title = phase === "queued" ? "Waiting for the HintWise reader…" : "Reading the handwriting…";
+  const text =
+    phase === "queued"
+      ? "Your photos are in line to be read. You can leave this page open, or come back to it later on this device."
+      : "A full sheet usually takes under a minute; Claude follows the game as it reads to sort out unclear moves. Keep this page open.";
   return (
     <section className="panel reading" aria-live="polite">
       <div className="spinner" aria-hidden="true" />
-      <h2>{waiting ? "Waiting for a reader…" : "Reading the handwriting…"}</h2>
+      <h2>{title}</h2>
       <p>
-        {secs}s.{" "}
-        {waiting
-          ? "Your photo is in line to be read. You can leave this page open, or come back to it later on this device."
-          : "A full sheet usually takes one to three minutes; Claude follows the game as it reads to sort out unclear moves."}
+        {secs}s. {text}
       </p>
       <div className="pages small">
         {pages.map((p, i) => (

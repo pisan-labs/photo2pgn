@@ -1,14 +1,32 @@
 # photo2pgn: Photo to PGN
 
-Turn a photo of a handwritten chess tournament scoresheet into a PGN file.
+Turn a photo of a handwritten chess tournament scoresheet into a PGN file, at **https://photo2pgn.hintwise.org**.
+
+For players, coaches, arbiters and club volunteers who have a pile of paper scoresheets and want the games in a database, an engine or an online analysis board.
 
 1. Take or upload a photo of the sheet (one or two pages).
-2. Claude reads every move cell, the header (players, event, date, round, ratings) and the result.
-3. A chess engine replays the game, checks every move is legal, and repairs misreadings, even on sheets in awful handwriting (see below).
-4. You review: corrected moves are amber, unclear ones blue, impossible ones red. Each move shows the board, what is on the sheet, and a list of the legal moves to pick from.
+2. Claude reads every move, the players, event, date, round, ratings and the result.
+3. A chess engine replays the game, checks every move is legal, and repairs misreadings, even on sheets in awful handwriting (below).
+4. You review: corrected or guessed moves are amber, unclear ones blue, a move left to you red. Each move shows the board, what is on the sheet, and the legal moves to pick from.
 5. Download the `.pgn` file or copy the text.
 
-The demo button runs the whole review on a sample game with no API call.
+The demo button runs the whole review on a sample game with no account and no key.
+
+## Two ways to have it read
+
+- **Free, with a HintWise account** (Google, or a sign-in link by email). It reads with HintWise's key through the HintWise gateway, within a daily and weekly allowance. When the allowance is used up, the page says which one and when it resets, and offers the next option.
+- **Your own Anthropic API key.** No account and no allowance. The key goes only from your browser to Anthropic; HintWise never sees it. Tick "Remember on this device" to keep it in this browser.
+
+## What is stored, and where
+
+- **Your photos** go from your browser to Claude to be read and are not kept. The one exception is the HintWise reader (below): there they wait on our server (Netlify) until they are read, then are deleted, at the latest after a day.
+- **Your games** stay in your browser. Nothing about them is stored on a server.
+- **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
+- **Delete my account:** sign in, open the account panel (top right), and choose "Delete my account". It deletes your account and your data in every HintWise app.
+
+## An honest limitation
+
+A sheet is only as good as its writing. The engine finds the legal game that fits what Claude read, but two different moves can sometimes lead to the same position (6. Bc4 or 6. Qa3 then 7. Qb3, say), and then only the photo can tell. Such moves are always flagged for you. Very faint, torn or crossed-out pages, and games recorded in descriptive notation, read less well.
 
 ## How bad handwriting is handled
 
@@ -17,124 +35,91 @@ Claude transcribes what it sees, with `_` for characters it cannot make out and 
 - **Readings, cheapest first:** the primary reading, one of Claude's alternatives, or the move as written in the sheet's language (piece letters in 15 languages).
 - **Near misses:** a legal move one or two misread characters away (5/6, 3/8, c/e, a/d and so on count as easy confusions).
 - **Guesses:** any legal move, priced by distance from what was read. A small bias favours natural moves (recaptures, captures, checks), which settles blank cells, even three in a row.
-- **Backtracking:** when a move cannot be fitted cheaply, the engine reconsiders earlier moves that could be to blame: the same side's moves with that piece, and the last four plies. It tries every legal move there, even for a clearly written move, and replays the game after it. A clear "Be6" that makes a later "Bxf3" impossible is found to be Bg4.
-- **Skipped or repeated moves:** players sometimes forget to write a move, or write one twice, which shifts every later move into the other column. When a cell's reading does not fit, the engine also tries leaving the cell out, or inserting a missing move before it; the moves after it decide. An inserted move shows as `+dxe5` in its cell and "not on the sheet" in the editor. You can do the same by hand: type `e5 Nf6` to insert e5 before Nf6, or `-` to leave a cell out.
-- **Knowing when to stop:** stopping costs a little per unplayed move. Fixes that come in clusters cost extra, as do fixes to clearly written moves. A guess that makes the next 20 moves fit wins, but a different game forced onto the sheet, or a smudge two moves from the end, is left as one red move for you, with the closest legal moves offered first.
-- **Every change is flagged:** amber for corrected or guessed moves, which say how many following moves fit as read; blue for unclear readings; red for a move left to you. Your own entry is final; if it is illegal, the engine says so at that move instead of rewriting earlier ones.
+- **Backtracking:** when a move cannot be fitted cheaply, the engine reconsiders earlier moves that could be to blame: the same side's moves with that piece, and the last four plies. It tries every legal move there, even for a clearly written move, and replays the game after it.
+- **Skipped or repeated moves:** when a player forgot to write a move, or wrote one twice, every later move sits in the other column. The engine also tries leaving a cell out, or inserting a missing move before it; the moves after it decide. You can do the same: type `e5 Nf6` to insert e5 before Nf6, or `-` to leave a cell out.
+- **Knowing when to stop:** stopping costs a little per unplayed move; fixes that come in clusters, and fixes to clearly written moves, cost extra. A guess that makes the next 20 moves fit wins; a different game forced onto the sheet, or a smudge two moves from the end, is left as one red move for you.
 
 The analysis runs in a Web Worker and takes up to about a second on a hard sheet.
 
-## How a conversion runs
+## For developers
+
+### How a reading runs
 
 ```
-browser ──POST /api/convert──▶ convert (sync function)
-  │                              ├─ checks the free caps (owner key only)
-  │                              ├─ stores photos + job record in Netlify Blobs
-  │                              └─ starts convert-worker ──▶ background function (up to 15 min)
-  │                                                            ├─ Claude reads the photos
-  │                                                            ├─ writes the result to the job
-  └──GET /api/jobs/:id (every 2.5 s)◀──────────────────────────┘  └─ deletes the photos
+own key:  browser ──────────────────────────────▶ api.anthropic.com
+free:     browser ── session token ─▶ HintWise gateway (owner's key, caps) ─▶ Anthropic
+reader:   browser ── session token ─▶ /api/convert ─▶ queue (Netlify Blobs)
+                                                        ▲ list, claim │ photos, prompt, schema
+          cli/pgn-worker.mjs (owner's machine) ─────────┘             ▼
+             └─ claude -p (subscription) ─▶ reading ─▶ POST result ─▶ checked against the schema
 ```
 
-Netlify's synchronous functions stop at 60 seconds, and a careful read of a full sheet can take longer, so the Claude call runs in a background function. The browser keeps the job id, so a reload or a locked phone picks the wait back up.
+The gateway passes only `model`, `max_tokens`, `system`, `messages` and `tools`, so Claude answers by calling one tool, `record_scoresheet`, whose input is checked against `src/lib/schema.ts`. Photos are shrunk in the browser to 1568 px and the request to under 1,000,000 bytes. The sign-in, gateway and account code in `src/lib/{supabase,auth,account,llm,signin-styles}.ts` is the HintWise platform template, unchanged apart from the app name.
 
-## Reading on your own machine (CLI reader)
+The server side (Netlify Functions) is only the queue for the HintWise reader. It holds no Anthropic key. It needs a signed-in visitor (it asks Supabase Auth whose session token it was sent) and counts readings per person.
 
-Free conversions can be read by Claude Code on your own computer, on your Claude subscription, instead of the API key:
+### The HintWise reader (your own machine)
 
-```
-browser ─▶ convert ─▶ job waits in the queue (Blobs)
-                         ▲            │
-cli/pgn-worker.mjs ──────┘ list, claim ▼ photos + prompt + schema
-   └─ claude -p (subscription) ─▶ reading ─▶ POST result ─▶ site checks it against the schema
-```
-
-Set on Netlify: `PGN_FREE_READER=local` (or `local-then-api`) and a long random `PGN_WORKER_TOKEN`. Then on your machine, logged in to Claude Code with your subscription:
+Free readings can be read by Claude Code on the owner's computer, on the Claude subscription. Set on Netlify `PGN_WORKER_TOKEN` (a long random value) and in `netlify.toml` `VITE_FREE_READER = "local-then-gateway"` (or `"local"`). Then, logged in to Claude Code with the subscription:
 
 ```sh
 export PGN_WORKER_TOKEN=...            # same value as on Netlify
-node cli/pgn-worker.mjs --site https://your-site --list    # what is waiting
-node cli/pgn-worker.mjs --site https://your-site --once    # read it all, then exit
-node cli/pgn-worker.mjs --site https://your-site           # keep watching (every 20 s)
+node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org --list    # what is waiting
+node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org --once    # read it all, then exit
+node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org           # keep watching (every 20 s)
 ```
 
-- The CLI claims a job before reading it. The claim lasts 15 minutes (`PGN_LEASE_MINUTES`). If the CLI dies, the job goes back in the queue. Two machines can run the CLI at once.
-- `claude` runs with no tools at all, no hooks, plugins, MCP servers or CLAUDE.md (`--safe-mode`). The photos go in as image blocks, so text in a photo cannot make it run anything. It gets the site's own instructions and answer schema, so it reads sheets exactly as the API reader does.
-- It never bills per token. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from claude's environment, and the CLI stops if claude reports any API key in use (`--allow-api-key` overrides).
-- A failed reading is put back in the queue up to 3 times, then the visitor sees an error and the free conversion is given back.
-- With `local-then-api`, a job no reader claims within `PGN_LOCAL_FALLBACK_SECONDS` (default 120) is read with `PGN_OWNER_API_KEY` instead. With `local`, it waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30) and then fails with a refund.
+- The CLI claims a job before reading it, for 15 minutes (`PGN_LEASE_MINUTES`); if it dies, the job goes back in the queue. Two machines can run it at once.
+- `claude` runs with no tools at all and no hooks, plugins, MCP servers or CLAUDE.md (`--safe-mode`); the photos go in as image blocks, so text in a photo cannot make it run anything. It gets the site's own instructions and answer schema.
+- It never bills per token: `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from claude's environment, and the CLI stops if claude reports any API key in use (`--allow-api-key` overrides).
+- A failed reading goes back in the queue up to 3 times, then the visitor sees an error and the reading is not counted.
+- With `local-then-gateway`, the browser cancels a job no reader has claimed within `VITE_LOCAL_FALLBACK_SECONDS` (default 120) and reads it through the gateway instead. With `local`, a job waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30).
 - To keep it running on a Mac, start it from a launchd agent or a `tmux` session. It keeps going through network blips and stops on setup problems (wrong token, missing `claude`).
 
-## Who pays
+### Settings
 
-- **Free conversions** use the site owner's Anthropic key (`PGN_OWNER_API_KEY`), with caps per person per day and per week and a global daily cap as a spending backstop. A failed conversion is not counted.
-- **Own key**: the visitor pastes an Anthropic key. It travels with the request to the background worker and on to Anthropic. It is never written to storage or logs. If the visitor ticks "Remember on this device", it is saved in their browser's localStorage only.
-
-Until sign-in is added, a "person" for the caps is a salted hash of the IP address. Everyone on a shared Wi-Fi (a whole tournament hall) shares one cap. Sign-in will replace this (see `netlify/lib/identity.ts`).
-
-Cost per sheet with Claude Opus 5.5 at `high` effort is an estimate, not yet measured: about $0.10 to $0.25 (a few thousand input tokens for the photo, 4k to 10k output tokens including thinking).
-
-## Settings (Netlify environment variables)
-
-Every name starts with `PGN_`, so keys and settings meant for other tools (`ANTHROPIC_API_KEY`, `CLAUDE_*`) are never picked up by accident.
+Build (`netlify.toml`, all public):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PGN_OWNER_API_KEY` | unset | Anthropic key for free conversions. Unset: only own-key conversions are offered (unless a CLI reader is set up). |
-| `PGN_FREE_READER` | `api` | Who reads free conversions: `api` (owner key), `local` (CLI reader), `local-then-api`. |
-| `PGN_WORKER_TOKEN` | unset | Bearer token for the CLI reader endpoints. Unset: those endpoints are off. |
-| `PGN_LOCAL_FALLBACK_SECONDS` | `120` | `local-then-api`: wait this long for a CLI reader before using the owner key. |
-| `PGN_LOCAL_TIMEOUT_MINUTES` | `30` | `local`: a job no reader picks up fails after this long, with a refund. |
-| `PGN_LEASE_MINUTES` | `15` | How long a claimed job is reserved for one CLI reader. |
-| `PGN_FREE_PER_DAY` | `3` | Free conversions per person per UTC day. |
-| `PGN_FREE_PER_WEEK` | `10` | Free conversions per person per ISO week (Monday, UTC). |
-| `PGN_FREE_GLOBAL_PER_DAY` | `100` | All free conversions per UTC day. |
-| `PGN_CLAUDE_MODEL` | `claude-opus-5-5` | Model used to read sheets. |
-| `PGN_CLAUDE_EFFORT` | `high` | `low`, `medium`, `high`, `xhigh` or `max`. |
-| `PGN_MAX_IMAGES` | `2` | Pages per game. |
-| `PGN_MAX_IMAGE_BYTES` | `2000000` | Largest photo accepted (the browser shrinks photos to about 1.9 MB). |
-| `PGN_IDENTITY_SALT` | `photo2pgn` | Salt for the IP hash. Set a random value in production. |
-| `PGN_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Only for local tests against the mock API. |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | HintWise's | Sign-in and the gateway (public by design) |
+| `VITE_FREE_READER` | `gateway` | `gateway`, `local` or `local-then-gateway` |
+| `VITE_LOCAL_FALLBACK_SECONDS` | `120` | `local-then-gateway`: wait this long for the HintWise reader |
 
-Requests use server-side refusal fallbacks (`fallbacks: "default"`), so a rare safety decline is retried on a fallback model in the same call.
+Netlify Functions (only needed for the HintWise reader; every name starts with `PGN_`, so nothing meant for other tools is picked up):
 
-## Deploy on Netlify
+| Variable | Default | Meaning |
+|---|---|---|
+| `PGN_WORKER_TOKEN` | unset | Bearer token for the CLI endpoints. Unset: the queue is off |
+| `PGN_READER_PER_DAY` / `_PER_WEEK` / `_GLOBAL_PER_DAY` | 3 / 10 / 100 | Readings by the HintWise reader per person per UTC day and ISO week, and for everyone per day |
+| `PGN_LOCAL_TIMEOUT_MINUTES` | `30` | A job no reader picks up fails after this long, and is not counted |
+| `PGN_LEASE_MINUTES` | `15` | How long a claimed job is reserved for one CLI reader |
+| `PGN_MAX_IMAGES`, `PGN_MAX_IMAGE_BYTES` | `2`, `2000000` | Pages per game, and the largest photo |
 
-1. Create a site from this repository. `netlify.toml` sets the build (`npm run build`, publish `dist`) and the functions.
-2. Set `PGN_OWNER_API_KEY` and `PGN_IDENTITY_SALT` (and any caps) under Site configuration > Environment variables.
-3. Deploy. Netlify Blobs needs no setup. A scheduled function deletes old jobs and counters daily.
+The gateway's caps for free readings with the owner's key are set by the owner in the platform, not here.
 
-## Develop
+### Develop
 
 ```sh
 npm install
-MOCK_CLAUDE=1 npm run dev        # whole app, fake reader returns the demo game, no cost
-npm run dev                      # real Claude: needs PGN_OWNER_API_KEY or an own key in the UI
-npm run check                    # typecheck, tests, build
+npm run dev        # the app; /api/* is served in memory (PGN_DEV_USER=me accepts the token "dev")
+npm run check      # lint, typecheck, tests with coverage (85% minimum), build
+npm run e2e        # Playwright walkthrough against vite preview, Anthropic faked in the page
 ```
 
-`npm run dev` serves `/api/*` from the same handlers as the Netlify functions, with an in-memory store. To run the real Netlify runtime (Blobs, background function) against a fake Anthropic API:
+Tests never touch the network: the template modules take fakes, the CLI tests use `dev/fake-claude.mjs`, and the walkthrough fakes api.anthropic.com in the browser. Sign-in only works on https://photo2pgn.hintwise.org.
 
-```sh
-npm run build
-node dev/mock-anthropic.mjs 4010 &
-PGN_OWNER_API_KEY=sk-ant-test PGN_ANTHROPIC_BASE_URL=http://localhost:4010 \
-  netlify dev --offline --dir dist --framework "#static"
-```
-
-If `NODE_OPTIONS` contains `--use-openssl-ca`, clear it for `netlify dev` (its worker threads refuse that flag).
-
-## Layout
+### Layout
 
 | Path | What |
 |---|---|
-| `src/lib/schema.ts` | What Claude returns (zod schema, shared by worker and browser) |
-| `src/lib/notation.ts` | Cleaning handwritten moves, piece letters in 15 languages, near-miss scoring |
-| `src/lib/repair.ts` | Replays the game and repairs misreadings: beam search, guesses, backtracking |
+| `src/lib/schema.ts`, `prompt.ts` | What Claude returns, and how it is asked (shared by the browser and the CLI reader) |
+| `src/lib/read.ts`, `reading.ts` | The reading: own key, gateway, or the queue with fallback; error messages |
+| `src/lib/notation.ts`, `repair.ts` | Cleaning handwritten moves; the search that repairs misreadings |
 | `src/lib/pgn.ts` | PGN export |
-| `src/components/` | Upload, review, board |
-| `netlify/lib/` | Handlers, caps, Claude call, Blobs store, settings |
-| `netlify/functions/` | Netlify entry points |
-| `cli/pgn-worker.mjs` | CLI reader: reads queued photos with your local Claude Code |
-| `dev/` | Local API for `vite`, mock Anthropic API, fake `claude` for CLI tests |
-| `tests/` | Vitest |
+| `src/lib/{supabase,auth,account,llm,signin-styles}.ts` | HintWise platform template: sign-in, account deletion, model calls |
+| `src/components/` | Upload, sign-in, review, board |
+| `netlify/lib/`, `netlify/functions/` | The HintWise reader queue |
+| `cli/pgn-worker.mjs` | The CLI reader |
+| `supabase/migrations/` | Registers the app with the gateway (stores nothing else) |
+| `dev/`, `e2e/`, `tests/` | Dev API, fake `claude`; Playwright; vitest |
