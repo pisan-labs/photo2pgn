@@ -747,3 +747,17 @@ table.moves {
   color: var(--muted);
   margin-left: 8px;
 }
+
+.st-skipped {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.cell.st-skipped {
+  text-decoration: line-through;
+}
+
+.ins {
+  font-size: 0.8em;
+  color: var(--fixed-line);
+}

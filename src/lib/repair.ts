@@ -17,8 +17,11 @@
 // distant moves prefer natural ones (recaptures, captures, checks). Stopping
 // is priced per unplayed ply, so a guess that makes the rest of the game
 // legal wins; fixes that come in clusters cost extra, so a chain of fixes
-// through garbage loses to stopping and asking the person. Every choice
-// other than the primary reading is flagged for review.
+// through garbage loses to stopping and asking the person. Players also
+// skip or repeat moves when writing, which shifts every later move into the
+// other column; so a cell can be left out, or a missing move inserted
+// before it, when its reading does not fit and the moves after it then do.
+// Every choice other than the primary reading is flagged for review.
 import { Chess } from "chess.js";
 import type { MoveRow, PlyReading } from "./schema";
 import {
@@ -31,8 +34,16 @@ import {
   type ParsedMove,
 } from "./notation";
 
-export type PlyStatus = "ok" | "unsure" | "fixed" | "illegal" | "unchecked";
-export type ChoiceSource = "edit" | "reading" | "alternative" | "written" | "near-miss" | "guess" | "backtrack";
+export type PlyStatus = "ok" | "unsure" | "fixed" | "skipped" | "illegal" | "unchecked";
+export type ChoiceSource =
+  | "edit"
+  | "reading"
+  | "alternative"
+  | "written"
+  | "near-miss"
+  | "guess"
+  | "backtrack"
+  | "skip";
 
 export interface PlyInput {
   moveNumber: number; // in the game (1. e4 e5 2. ...), whatever the sheet says
@@ -51,6 +62,9 @@ export interface PlyResult extends PlyInput {
   fenAfter: string | null;
   suggestions: string[]; // legal moves worth offering in a picker, best first
   support: number; // for a fixed move: how many following moves fit as read
+  label: string | null; // the move's number in the game, "12." or "12..."
+  // A move missing from the sheet, played just before this cell's move.
+  inserted: { san: string; label: string; fenBefore: string; fenAfter: string } | null;
 }
 
 export interface Analysis {
@@ -81,7 +95,12 @@ const COST = {
   cluster: 2,
   // Each ply left unplayed when the search gives up.
   stopPerPly: 1,
+  // A cell that is not a move in the game (repeated or extra on the sheet).
+  skip: 3.5,
+  // A move missing from the sheet, before this cell (+ the natural-move prior).
+  insert: 4,
 };
+const SHIFT_STATES = 6; // paths on which skipping or inserting is tried
 const CLUSTER_PLIES = 2;
 const MAX_BACKTRACKS = 12;
 const RECENT_PLIES = 4; // always reconsidered when backtracking
@@ -165,6 +184,7 @@ function prepare(r: PlyReading | null, lang: string): ReadingInfo {
 // ---- positions, cached by FEN ----
 
 interface Position {
+  fen: string;
   sans: string[];
   parsed: (ParsedMove | null)[];
 }
@@ -175,7 +195,7 @@ class Positions {
     let p = this.cache.get(fen);
     if (!p) {
       const sans = new Chess(fen).moves();
-      p = { sans, parsed: sans.map((s) => parseMove(cleanMoveText(s))) };
+      p = { fen, sans, parsed: sans.map((s) => parseMove(cleanMoveText(s))) };
       this.cache.set(fen, p);
     }
     return p;
@@ -201,9 +221,46 @@ function distanceTo(info: ReadingInfo, m: ParsedMove | null, san: string): numbe
 // ---- candidates for one ply in one position ----
 
 interface Candidate {
-  san: string;
+  san: string; // "" for a skipped cell
   cost: number;
   source: ChoiceSource;
+  insert?: string; // a missing move played first
+  skip?: boolean;
+}
+
+/** The person's entry: "-" leaves the cell out; "e5 Nf6" inserts e5 first. */
+export function parseEdit(edit: string): { skip: true } | { moves: string[] } {
+  const t = edit.trim();
+  if (t === "-" || t === "–" || t === "—") return { skip: true };
+  return { moves: t.split(/[\s,]+/).filter(Boolean).slice(0, 2) };
+}
+
+function exactSans(pos: Position, text: string): string[] {
+  const e = prepare({ written: text, san: text, alternatives: [], legibility: "clear" }, "en");
+  return exact(pos, e.primary).map((i) => pos.sans[i]);
+}
+
+function editCandidates(pos: Position, edit: string, positions: Positions): Candidate[] {
+  const e = parseEdit(edit);
+  if ("skip" in e) return [{ san: "", cost: 0, source: "edit", skip: true }];
+  if (e.moves.length === 0) return [];
+  if (e.moves.length === 1) return exactSans(pos, e.moves[0]).map((san) => ({ san, cost: 0, source: "edit" }));
+  const out: Candidate[] = [];
+  for (const first of exactSans(pos, e.moves[0])) {
+    for (const san of exactSans(positions.get(play(pos.fen, first)), e.moves[1])) {
+      out.push({ san, cost: 0, source: "edit", insert: first });
+    }
+  }
+  return out;
+}
+
+/** The position after a candidate (a skipped cell leaves it unchanged). */
+function apply(fen: string, c: Candidate): string {
+  if (c.skip) return fen;
+  const chess = new Chess(fen);
+  if (c.insert) chess.move(c.insert);
+  chess.move(c.san);
+  return chess.fen();
 }
 
 /**
@@ -232,16 +289,13 @@ function candidates(
   info: ReadingInfo,
   edit: string | undefined,
   backtracking: boolean,
-  where: Where = { lastTo: null, moveNumber: 1 },
+  where: Where,
+  positions: Positions,
   allGuesses = false,
 ): { cands: Candidate[]; blankGuess: boolean } {
+  // The person's own entry is final: legal or not, nothing else is tried.
+  if (edit !== undefined) return { cands: editCandidates(pos, edit, positions), blankGuess: false };
   if (pos.sans.length === 0) return { cands: [], blankGuess: false };
-
-  if (edit !== undefined) {
-    // The person's own entry is final: legal or not, nothing else is tried.
-    const e = prepare({ written: edit, san: edit, alternatives: [], legibility: "clear" }, "en");
-    return { cands: exact(pos, e.primary).map((i) => ({ san: pos.sans[i], cost: 0, source: "edit" })), blankGuess: false };
-  }
 
   const out = new Map<string, Candidate>();
   const add = (i: number, cost: number, source: ChoiceSource) => {
@@ -313,7 +367,7 @@ interface Ctx {
   best: { node: Node; at: number; total: number } | null; // the cheapest place to give up
 }
 
-const FIXES = new Set<ChoiceSource>(["near-miss", "guess", "backtrack"]);
+const FIXES = new Set<ChoiceSource>(["near-miss", "guess", "backtrack", "skip"]);
 
 function giveUp(ctx: Ctx, node: Node, at: number) {
   const total = node.cost + COST.stopPerPly * (ctx.plies.length - at);
@@ -331,18 +385,49 @@ function where(ctx: Ctx, node: Node): Where {
 
 function candidatesAt(ctx: Ctx, node: Node, backtracking: boolean, allGuesses = false) {
   const i = node.depth;
-  return candidates(ctx.positions.get(node.fen), ctx.infos[i], ctx.edits[i], backtracking, where(ctx, node), allGuesses);
+  const pos = ctx.positions.get(node.fen);
+  return candidates(pos, ctx.infos[i], ctx.edits[i], backtracking, where(ctx, node), ctx.positions, allGuesses);
+}
+
+/**
+ * When a cell's reading is not legal here, the sheet may be shifted: try
+ * leaving the cell out, or inserting a missing move before it so that the
+ * reading becomes legal. The moves after it decide whether the shift holds.
+ */
+function shiftCandidates(ctx: Ctx, node: Node): Candidate[] {
+  const i = node.depth;
+  const info = ctx.infos[i];
+  if (ctx.edits[i] !== undefined || info.blank) return [];
+  const pos = ctx.positions.get(node.fen);
+  if (exact(pos, info.primary).length > 0) return [];
+  const read = info.legibility === "clear" ? 0 : COST.readingUnclear;
+  const w = where(ctx, node);
+  const inserts: Candidate[] = [];
+  pos.sans.forEach((g, gi) => {
+    const after = ctx.positions.get(play(node.fen, g));
+    for (const m of exact(after, info.primary)) {
+      const cost = COST.insert + read + prior(pos.parsed[gi], g, w.lastTo, w.moveNumber);
+      inserts.push({ san: after.sans[m], cost, source: "reading", insert: g });
+    }
+  });
+  const skip: Candidate = { san: "", cost: COST.skip, source: "skip", skip: true };
+  return [skip, ...inserts.sort((a, b) => a.cost - b.cost).slice(0, 8)];
 }
 
 /** The extra cost of a candidate given the path so far (clustered fixes). */
+function isFix(ctx: Ctx, i: number, c: Candidate): boolean {
+  if (c.source === "edit" || ctx.infos[i].blank) return false;
+  return FIXES.has(c.source) || Boolean(c.insert) || Boolean(c.skip);
+}
+
 function pathCost(ctx: Ctx, node: Node, c: Candidate): number {
   const i = node.depth;
-  const fix = FIXES.has(c.source) && !ctx.infos[i].blank;
+  const fix = isFix(ctx, i, c);
   return fix && i - node.lastFix <= CLUSTER_PLIES ? COST.cluster : 0;
 }
 
 function child(ctx: Ctx, node: Node, c: Candidate, fen: string): Node {
-  const fix = FIXES.has(c.source) && !ctx.infos[node.depth].blank;
+  const fix = isFix(ctx, node.depth, c);
   return {
     fen,
     cost: node.cost + c.cost + pathCost(ctx, node, c),
@@ -364,13 +449,16 @@ function play(fen: string, san: string): string {
 function step(ctx: Ctx, beam: Node[], i: number): { next: Node[]; width: number } {
   const proposals: { parent: Node; cand: Candidate; cost: number }[] = [];
   let blank = false;
-  for (const node of beam) {
+  beam.forEach((node, rank) => {
     // Stopping here (ply i left for the person) is always an option.
     giveUp(ctx, node, i);
     const { cands, blankGuess } = candidatesAt(ctx, node, false);
     blank ||= blankGuess;
-    for (const c of cands) proposals.push({ parent: node, cand: c, cost: node.cost + c.cost + pathCost(ctx, node, c) });
-  }
+    const shifts = rank < SHIFT_STATES ? shiftCandidates(ctx, node) : [];
+    for (const c of [...cands, ...shifts]) {
+      proposals.push({ parent: node, cand: c, cost: node.cost + c.cost + pathCost(ctx, node, c) });
+    }
+  });
   proposals.sort((a, b) => a.cost - b.cost);
   const width = blank ? BEAM_WIDTH_BLANK : BEAM_WIDTH;
   const ceiling = ctx.best?.total ?? Infinity;
@@ -378,11 +466,15 @@ function step(ctx: Ctx, beam: Node[], i: number): { next: Node[]; width: number 
   const seen = new Set<string>();
   const boards = new Map<Node, Chess>();
   const extend = (p: (typeof proposals)[number]) => {
-    let chess = boards.get(p.parent);
-    if (!chess) boards.set(p.parent, (chess = new Chess(p.parent.fen)));
-    chess.move(p.cand.san);
-    const fen = chess.fen();
-    chess.undo();
+    let fen: string;
+    if (p.cand.skip || p.cand.insert) fen = apply(p.parent.fen, p.cand);
+    else {
+      let chess = boards.get(p.parent);
+      if (!chess) boards.set(p.parent, (chess = new Chess(p.parent.fen)));
+      chess.move(p.cand.san);
+      fen = chess.fen();
+      chess.undo();
+    }
     if (seen.has(fen)) return false; // a cheaper path already reached it
     seen.add(fen);
     next.push(child(ctx, p.parent, p.cand, fen));
@@ -415,7 +507,8 @@ function backtrack(ctx: Ctx, node: Node, j: number, budget: number): Node[] {
   const blamed = (k: number) => {
     if (k >= j - RECENT_PLIES) return true;
     if (ctx.plies[k].color !== side) return false;
-    const m = parseMove(cleanMoveText(chain[k + 1].cand!.san));
+    const san = chain[k + 1].cand!.san;
+    const m = san ? parseMove(cleanMoveText(san)) : null;
     if (!m || m.castle || target.castle) return Boolean(m?.castle && target.castle);
     return m.piece === target.piece || m.to === target.to;
   };
@@ -427,7 +520,7 @@ function backtrack(ctx: Ctx, node: Node, j: number, budget: number): Node[] {
     // Every legal move is worth a try here: only the replay decides.
     const options = candidatesAt(ctx, chain[k], true, true).cands.filter((c) => c.san !== was);
     for (const c of options) {
-      let cur = { ...child(ctx, chain[k], c, play(chain[k].fen, c.san)), protectUntil: j + PROTECT_PLIES };
+      let cur = { ...child(ctx, chain[k], c, apply(chain[k].fen, c)), protectUntil: j + PROTECT_PLIES };
       if (cur.cost >= budget) continue;
       // Replay the plies after k as read, then ply j.
       for (let m = k + 1; m <= j && cur; m++) {
@@ -436,7 +529,7 @@ function backtrack(ctx: Ctx, node: Node, j: number, budget: number): Node[] {
           cur = null as unknown as Node;
           break;
         }
-        cur = child(ctx, cur, next, play(cur.fen, next.san));
+        cur = child(ctx, cur, next, apply(cur.fen, next));
         if (cur.cost >= budget) {
           cur = null as unknown as Node;
           break;
@@ -500,6 +593,10 @@ function primaryPath(ctx: Ctx, start: string): Candidate[] | null {
     const edit = ctx.edits[i];
     const info = ctx.infos[i];
     let matches: number[];
+    if (edit !== undefined) {
+      const e = parseEdit(edit);
+      if (!("moves" in e) || e.moves.length !== 1) return null; // a skip or an insert: search
+    }
     if (edit !== undefined) matches = exact(pos, prepare({ written: edit, san: edit, alternatives: [], legibility: "clear" }, "en").primary);
     else if (info.legibility === "illegible") return null;
     else matches = exact(pos, info.primary);
@@ -516,15 +613,27 @@ function primaryPath(ctx: Ctx, start: string): Candidate[] | null {
 function noteFor(info: ReadingInfo, c: Candidate, support: number): string {
   const read = info.text;
   const fits = support > 0 ? ` The next ${support} move${support > 1 ? "s" : ""} fit as read.` : "";
+  if (c.skip) {
+    return c.source === "edit"
+      ? "Left out by you."
+      : `Left out of the game: "${read}" does not fit here, and the moves after it fit without it (a repeated or extra entry on the sheet?).${fits}`;
+  }
+  const missing = c.insert
+    ? `A move seems to be missing from the sheet before this one; ${c.insert} (not on the sheet) fits. `
+    : "";
   switch (c.source) {
     case "edit":
-      return "Entered by you.";
+      return c.insert ? `Entered by you, with ${c.insert} before it.` : "Entered by you.";
     case "reading":
-      return info.legibility === "clear" ? "" : `Handwriting unclear; read as ${c.san}.`;
+      return missing
+        ? `${missing}Then "${read}" reads as ${c.san}.${fits}`
+        : info.legibility === "clear"
+          ? ""
+          : `Handwriting unclear; read as ${c.san}.`;
     case "alternative":
-      return `Read as "${read}"; the alternative reading ${c.san} fits the game.${fits}`;
+      return `${missing}Read as "${read}"; the alternative reading ${c.san} fits the game.${fits}`;
     case "written":
-      return `Used the move as written ("${read}") in the sheet's notation: ${c.san}.${fits}`;
+      return `${missing}Used the move as written ("${read}") in the sheet's notation: ${c.san}.${fits}`;
     case "near-miss":
       return `Read as "${read}", which does not fit here; ${c.san} is the closest legal move.${fits}`;
     case "backtrack":
@@ -533,19 +642,29 @@ function noteFor(info: ReadingInfo, c: Candidate, support: number): string {
       return info.blank
         ? `The cell was blank or unreadable; ${c.san} is a guess.${fits}`
         : `Read as "${read}", which does not fit here; ${c.san} is a guess.${fits}`;
+    case "skip":
+      return "";
   }
 }
 
 function statusFor(c: Candidate, info: ReadingInfo): PlyStatus {
+  if (c.skip) return "skipped";
   if (c.source === "edit") return "ok";
+  if (c.insert) return "fixed";
   if (c.source === "reading") return info.legibility === "clear" && c.cost < COST.ambiguous ? "ok" : "unsure";
   return "fixed";
+}
+
+/** "12." or "12..." for the side to move in a position. */
+function labelOf(chess: Chess): string {
+  return `${chess.moveNumber()}${chess.turn() === "w" ? "." : "..."}`;
 }
 
 /** Legal moves to offer in a picker, closest to the reading first. */
 function suggestionsFor(ctx: Ctx, fen: string, i: number): string[] {
   const pos = ctx.positions.get(fen);
-  const first = candidates(pos, ctx.infos[i], undefined, true, { lastTo: null, moveNumber: ctx.plies[i].moveNumber })
+  const w = { lastTo: null, moveNumber: ctx.plies[i].moveNumber };
+  const first = candidates(pos, ctx.infos[i], undefined, true, w, ctx.positions)
     .cands.slice(0, 8)
     .map((c) => c.san);
   return [...new Set([...first, ...pos.sans])];
@@ -572,11 +691,11 @@ export function analyzeGame(
   const fast = primaryPath(ctx, start);
   const { choices, stoppedAt } = fast ? { choices: fast, stoppedAt: null } : search(ctx, start);
 
-  // How many plies after each one were played exactly as read.
+  // How many cells after each one were played exactly as read.
+  const clean = (c: Candidate) => (c.source === "reading" || c.source === "edit") && !c.insert && !c.skip;
   const support = choices.map(() => 0);
   for (let i = choices.length - 2; i >= 0; i--) {
-    const nxt = choices[i + 1].source;
-    support[i] = nxt === "reading" || nxt === "edit" ? 1 + support[i + 1] : 0;
+    support[i] = clean(choices[i + 1]) ? 1 + support[i + 1] : 0;
   }
 
   const results: PlyResult[] = [];
@@ -585,20 +704,30 @@ export function analyzeGame(
     const c = choices[index];
     const info = ctx.infos[index];
     if (c) {
+      let inserted: PlyResult["inserted"] = null;
+      if (c.insert) {
+        const fenBefore = replay.fen();
+        const label = labelOf(replay);
+        replay.move(c.insert);
+        inserted = { san: replay.history().at(-1) ?? c.insert, label, fenBefore, fenAfter: replay.fen() };
+      }
       const fenBefore = replay.fen();
-      replay.move(c.san);
+      const label = c.skip ? null : labelOf(replay);
+      if (!c.skip) replay.move(c.san);
       const status = statusFor(c, info);
       results.push({
         ...ply,
         index,
         status,
-        san: c.san,
+        san: c.skip ? null : c.san,
         source: c.source,
         note: noteFor(info, c, support[index]),
         fenBefore,
-        fenAfter: replay.fen(),
-        suggestions: status === "ok" ? [] : suggestionsFor(ctx, fenBefore, index),
-        support: status === "fixed" ? support[index] : 0,
+        fenAfter: c.skip ? fenBefore : replay.fen(),
+        suggestions: status === "ok" ? [] : suggestionsFor(ctx, inserted?.fenBefore ?? fenBefore, index),
+        support: status === "fixed" || status === "skipped" ? support[index] : 0,
+        label,
+        inserted,
       });
     } else if (index === stoppedAt) {
       const fenBefore = replay.fen();
@@ -623,6 +752,8 @@ export function analyzeGame(
         fenAfter: null,
         suggestions: over ? [] : suggestionsFor(ctx, fenBefore, index),
         support: 0,
+        label: labelOf(replay),
+        inserted: null,
       });
     } else {
       results.push({
@@ -636,6 +767,8 @@ export function analyzeGame(
         fenAfter: null,
         suggestions: [],
         support: 0,
+        label: null,
+        inserted: null,
       });
     }
   });

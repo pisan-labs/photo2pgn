@@ -59,20 +59,27 @@ export function buildPgn(headers: GameHeaders, analysis: Analysis, opts: PgnOpti
 
   const tokens: string[] = [];
   let needNumber = true;
-  for (const p of analysis.plies) {
-    if (!p.san) break;
-    if (p.color === "w") tokens.push(`${p.moveNumber}.`);
-    else if (needNumber) tokens.push(`${p.moveNumber}...`);
-    tokens.push(p.san);
+  // Numbers come from the game ("12..." for Black), not from the sheet, which
+  // may be shifted by a skipped or missing move.
+  const emit = (label: string, san: string, comment: string | null) => {
+    if (label.endsWith("...")) {
+      if (needNumber) tokens.push(label);
+    } else tokens.push(label);
+    tokens.push(san);
     needNumber = false;
-    if (opts.commentFixes && p.status === "fixed" && p.note) {
-      tokens.push(`{${escapeComment(p.note)}}`);
+    if (comment) {
+      tokens.push(`{${escapeComment(comment)}}`);
       needNumber = true; // a black move after a comment repeats its number
     }
+  };
+  for (const p of analysis.plies) {
+    if (p.status === "illegal" || p.status === "unchecked") break;
+    const fixed = opts.commentFixes && p.status !== "ok" && p.status !== "unsure";
+    if (p.inserted) emit(p.inserted.label, p.inserted.san, fixed ? "Not on the sheet." : null);
+    if (p.san && p.label) emit(p.label, p.san, fixed && p.note ? p.note : null);
   }
   if (analysis.stoppedAt !== null) {
-    const p = analysis.plies[analysis.stoppedAt];
-    const where = `${p.moveNumber}${p.color === "w" ? "." : "..."}`;
+    const where = analysis.plies[analysis.stoppedAt].label ?? "here";
     tokens.push(`{Moves from ${where} on could not be read as legal moves.}`);
   }
   tokens.push(result);

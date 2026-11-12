@@ -23,3 +23,5 @@
 2026-11-12 [note] Platform instructions from the Plabs session: gateway for the owner key, BYOK browser-direct, Supabase sign-in, HintWise footer and favicon. Conflicts with server key, own caps and CLI photo queue sent to owner.
 
 2026-11-12 [code] HintWise footer embedded byte for byte in index.html (sha256 test), HintWise favicon, docs renamed photo2pgn after the repo rename.
+
+2026-11-12 [code] Shifted sheets: engine can leave a cell out or insert a missing move before it when the reading does not fit; edits "-" and "e5 Nf6"; PGN numbered by the game. Done on the 15-min default (owner unanswered).

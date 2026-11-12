@@ -23,6 +23,7 @@ const STATUS_LABEL: Record<PlyStatus, string> = {
   ok: "OK",
   unsure: "Unclear handwriting",
   fixed: "Corrected, please check",
+  skipped: "Left out of the game",
   illegal: "Not a legal move",
   unchecked: "Not checked yet",
 };
@@ -33,6 +34,7 @@ function plyLabel(p: PlyResult) {
 
 function cellText(p: PlyResult, edits: Record<number, string>) {
   if (p.san) return p.san;
+  if (p.status === "skipped") return p.reading?.san || p.reading?.written || "-";
   return edits[p.index] ?? (p.reading?.san || p.reading?.written || "?");
 }
 
@@ -83,9 +85,9 @@ function Review({
   const [commentFixes, setCommentFixes] = useState(false);
 
   const counts = useMemo(() => {
-    const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, illegal: 0, unchecked: 0 };
+    const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, skipped: 0, illegal: 0, unchecked: 0 };
     for (const p of analysis.plies) c[p.status]++;
-    return c;
+    return { ...c, inserted: analysis.plies.filter((p) => p.inserted).length };
   }, [analysis]);
 
   const setEdit = (index: number, value: string | null) => {
@@ -133,14 +135,18 @@ function Review({
             Read {Math.ceil(plies.length / 2)} moves.{" "}
             {counts.illegal > 0
               ? `One move needs your fix before the rest can be checked.`
-              : counts.fixed + counts.unsure > 0
-                ? `The game is legal; ${counts.fixed + counts.unsure} moves are worth a look.`
+              : counts.fixed + counts.unsure + counts.skipped > 0
+                ? counts.fixed + counts.unsure + counts.skipped === 1
+                  ? "The game is legal; 1 move is worth a look."
+                  : `The game is legal; ${counts.fixed + counts.unsure + counts.skipped} moves are worth a look.`
                 : "Every move is legal and clearly read."}
             {analysis.endState === "checkmate" && " Ends in checkmate."}
           </p>
           <ul className="legend">
             <li className="st-fixed">{counts.fixed} corrected</li>
             <li className="st-unsure">{counts.unsure} unclear</li>
+            {counts.inserted > 0 && <li className="st-fixed">{counts.inserted} missing from the sheet</li>}
+            {counts.skipped > 0 && <li className="st-skipped">{counts.skipped} left out</li>}
             <li className="st-illegal">{counts.illegal} not legal</li>
             {counts.unchecked > 0 && <li className="st-unchecked">{counts.unchecked} not checked yet</li>}
           </ul>
@@ -260,8 +266,13 @@ function MoveGrid({
         className={`cell st-${p.status}${selected === p.index ? " selected" : ""}`}
         onClick={() => onSelect(p.index)}
         title={STATUS_LABEL[p.status]}
-        aria-label={`${plyLabel(p)} ${cellText(p, edits)}, ${STATUS_LABEL[p.status]}`}
+        aria-label={`${plyLabel(p)} ${p.inserted ? `${p.inserted.san} (not on the sheet) then ` : ""}${cellText(p, edits)}, ${STATUS_LABEL[p.status]}`}
       >
+        {p.inserted && (
+          <span className="ins" aria-hidden="true">
+            +{p.inserted.san}{" "}
+          </span>
+        )}
         {cellText(p, edits)}
       </button>
     ) : (
@@ -358,11 +369,24 @@ function PlyDetail({
             <dd>{ply.sheetNumber}</dd>
           </>
         )}
+        {ply.inserted && (
+          <>
+            <dt>Missing before it</dt>
+            <dd>
+              <code>
+                {ply.inserted.label} {ply.inserted.san}
+              </code>{" "}
+              (not on the sheet)
+            </dd>
+          </>
+        )}
         {ply.san && (
           <>
             <dt>In the PGN</dt>
             <dd>
-              <code>{ply.san}</code>
+              <code>
+                {ply.label} {ply.san}
+              </code>
             </dd>
           </>
         )}
@@ -387,9 +411,14 @@ function PlyDetail({
               autoCapitalize="off"
               autoComplete="off"
               placeholder="e.g. Nf3"
+              aria-describedby="move-edit-hint"
             />
             <button type="submit">Use</button>
           </div>
+          <p className="hint" id="move-edit-hint">
+            A move missing before this one? Type both, like <code>e5 Nf6</code>. Not a move at all? Type{" "}
+            <code>-</code> to leave it out.
+          </p>
           {ply.suggestions.length > 0 && (
             <div className="chips" aria-label="Legal moves">
               {ply.suggestions.slice(0, 12).map((s) => (
@@ -401,8 +430,22 @@ function PlyDetail({
           )}
           <div className="row">
             {(ply.status === "fixed" || ply.status === "unsure") && ply.san && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => onEdit(ply.inserted ? `${ply.inserted.san} ${ply.san}` : ply.san!)}
+              >
+                {ply.inserted ? `${ply.inserted.san} then ${ply.san} is right` : `${ply.san} is right`}
+              </button>
+            )}
+            {ply.inserted && ply.san && (
               <button type="button" className="secondary" onClick={() => onEdit(ply.san!)}>
-                {ply.san} is right
+                Remove the inserted {ply.inserted.san}
+              </button>
+            )}
+            {ply.status !== "skipped" && ply.status !== "ok" && (
+              <button type="button" className="secondary" onClick={() => onEdit("-")}>
+                Leave this entry out
               </button>
             )}
             {edit !== undefined && (
@@ -418,7 +461,13 @@ function PlyDetail({
         <Board
           fen={fen}
           lastMove={last}
-          caption={ply.fenAfter ? `After ${plyLabel(ply)} ${ply.san}` : `Before ${plyLabel(ply)}, ${side} to move`}
+          caption={
+            ply.san
+              ? `After ${ply.label} ${ply.san}`
+              : ply.status === "skipped"
+                ? "Position when the entry was left out"
+                : `Before ${ply.label ?? plyLabel(ply)}, ${side} to move`
+          }
         />
       )}
     </div>
@@ -501,7 +550,7 @@ function PgnExport({
     <div className="pgn">
       {stop && (
         <p className="warn">
-          The PGN stops before {plyLabel(stop)}. Fix that move to include the rest of the game.
+          The PGN stops before {stop.label ?? plyLabel(stop)}. Fix that move to include the rest of the game.
         </p>
       )}
       <textarea readOnly value={pgn} rows={10} aria-label="PGN text" onFocus={(e) => e.currentTarget.select()} />
