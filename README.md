@@ -7,7 +7,7 @@ For players, coaches, arbiters and club volunteers who have a pile of paper scor
 1. Take a photo of the sheet with your phone (one or two pages), or upload one. Turn and crop it to the move table if needed.
 2. Claude reads every move, the players, event, date, round, ratings and the result.
 3. A chess engine replays the game, checks every move is legal, and repairs misreadings, even on sheets in awful handwriting (below).
-4. You review: corrected or guessed moves are amber, unclear ones blue, a move left to you red. Each move shows the board, what is on the sheet, and the legal moves to pick from. Fix a move by typing it, picking it, or tapping the piece and its square on the board; add a move the player forgot to write, or leave out one written by mistake. Add notes to the game.
+4. You review on an analysis board: the board on the left, the moves on the right, and buttons (or the arrow keys, Home and End) to go to the start, back, forward and to the end. Corrected or guessed moves are amber, unclear ones blue, a move left to you red. Under the board, each move shows what is on the sheet and the legal moves to pick from. Fix a move by typing it, picking it, or tapping the piece and its square on the board; add a move the player forgot to write, or leave out one written by mistake. Add notes to the game.
 5. Download the `.pgn` file, copy it, email or share it, or open it in Lichess (one click) or Chess.com.
 6. Every game is kept in **My games**, on this device, and in your HintWise account when you are signed in, so a sheet photographed on a phone can be finished on a computer.
 

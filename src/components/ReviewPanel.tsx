@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Extraction, GameHeaders } from "../lib/schema";
 import { rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
 import { useAnalysis } from "../lib/useAnalysis";
@@ -8,7 +8,8 @@ import type { SavedGame } from "../lib/library";
 const FLIP_STORAGE = "photo2pgn.flipped";
 import { buildPgn, pgnFileName } from "../lib/pgn";
 import { CHESSCOM_ANALYSIS, canShareFiles, gameTitle, importToLichess, mailtoHref, pgnFile } from "../lib/export";
-import { Board, moveSquares } from "./Board";
+import { GameViewer, STATUS_LABEL } from "./GameViewer";
+import { START, boardView, plyLabel, stepTo } from "../lib/view";
 
 export interface ReviewSession {
   id: string;
@@ -26,25 +27,6 @@ interface Props {
   onStartOver: () => void;
   /** Called (debounced) with the game as it stands, to keep it in My games. */
   onSave?: (game: SavedGame) => void;
-}
-
-const STATUS_LABEL: Record<PlyStatus, string> = {
-  ok: "OK",
-  unsure: "Unclear handwriting",
-  fixed: "Corrected, please check",
-  skipped: "Left out of the game",
-  illegal: "Not a legal move",
-  unchecked: "Not checked yet",
-};
-
-function plyLabel(p: PlyResult) {
-  return `${p.moveNumber}${p.color === "w" ? "." : "..."}`;
-}
-
-function cellText(p: PlyResult, edits: Record<number, string>) {
-  if (p.san) return p.san;
-  if (p.status === "skipped") return p.reading?.san || p.reading?.written || "-";
-  return edits[p.index] ?? (p.reading?.san || p.reading?.written || "?");
 }
 
 export function ReviewPanel(props: Props) {
@@ -111,8 +93,10 @@ function Review({
     return () => clearTimeout(t);
   }, [pgn, session, headers, extraction, edits, busy, onSave]);
   const firstToCheck = analysis.plies.find((p) => p.status !== "ok")?.index ?? null;
-  const [selected, setSelected] = useState<number | null>(firstToCheck ?? (plies.length ? 0 : null));
+  const [selected, setSelected] = useState<number>(firstToCheck ?? START);
   const [flipped, setFlipped] = useState(() => load<boolean>(FLIP_STORAGE) === true);
+  // Changing a move on the board: on by default for a move that is not legal.
+  const [boardEdit, setBoardEdit] = useState<{ index: number; on: boolean } | null>(null);
 
   const counts = useMemo(() => {
     const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, skipped: 0, illegal: 0, unchecked: 0 };
@@ -127,32 +111,33 @@ function Review({
     onChange({ ...session, edits: next });
   };
 
-  const sel = selected !== null ? analysis.plies[selected] : undefined;
-  const detailRef = useRef<HTMLElement>(null);
-  // On a phone the editor sits below the move list; bring it into view.
-  const pick = (i: number) => {
-    setSelected(i);
-    if (window.matchMedia("(max-width: 720px)").matches) {
-      requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-    }
-  };
+  const sel: PlyResult | undefined = selected >= 0 ? analysis.plies[selected] : undefined;
+  const editing = sel ? (boardEdit?.index === sel.index ? boardEdit.on : sel.status === "illegal") : false;
+  const view = boardView(analysis, selected, editing);
+  const withInsert = (p: PlyResult, san: string) => (p.inserted ? `${p.inserted.san} ${san}` : san);
 
-  // Arrow keys step through the moves when focus is not in a text field.
+  // Arrow keys step through the game when focus is not in a text field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (t.closest("input, textarea, select")) return;
-      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-        e.preventDefault();
-        setSelected((s) => {
-          const n = (s ?? -1) + (e.key === "ArrowRight" ? 1 : -1);
-          return Math.max(0, Math.min(analysis.plies.length - 1, n));
-        });
-      }
+      if (e.altKey || e.ctrlKey || e.metaKey || t.closest("input, textarea, select, [contenteditable]")) return;
+      const last = analysis.plies.length - 1;
+      const to: Record<string, (s: number) => number> = {
+        ArrowLeft: (s) => s - 1,
+        ArrowRight: (s) => s + 1,
+        ArrowUp: () => START,
+        Home: () => START,
+        ArrowDown: () => last,
+        End: () => last,
+      };
+      const move = to[e.key];
+      if (!move) return;
+      e.preventDefault();
+      setSelected((s) => stepTo(analysis, move(s)));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [analysis.plies.length]);
+  }, [analysis]);
 
   return (
     <div className="review">
@@ -185,7 +170,7 @@ function Review({
         </div>
         <div className="row">
           {firstToCheck !== null && (
-            <button type="button" onClick={() => pick(nextToCheck(analysis, selected))}>
+            <button type="button" onClick={() => setSelected(nextToCheck(analysis, selected))}>
               Next to check
             </button>
           )}
@@ -195,33 +180,45 @@ function Review({
         </div>
       </section>
 
-      <div className="review-grid">
-        <section className="panel photo-panel" aria-label="Scoresheet photo">
-          <PhotoViewer images={session.images} />
-        </section>
+      <GameViewer
+        analysis={analysis}
+        edits={edits}
+        headers={headers}
+        selected={selected}
+        onSelect={setSelected}
+        view={view}
+        flipped={flipped}
+        onFlip={() => {
+          setFlipped(!flipped);
+          save(FLIP_STORAGE, !flipped);
+        }}
+        onBoardMove={(san) => {
+          if (!sel) return;
+          setBoardEdit({ index: sel.index, on: false });
+          setEdit(sel.index, withInsert(sel, san));
+        }}
+      />
 
-        <section className="panel moves-panel" aria-label="Moves">
-          <MoveGrid analysis={analysis} edits={edits} selected={selected} onSelect={pick} />
-        </section>
-
-        <section className="panel detail-panel" aria-label="Selected move" ref={detailRef}>
+      <div className="review-grid two">
+        <section className="panel detail-panel" aria-label="This move">
           {sel ? (
-            <PlyDetail
+            <Commentary
               key={sel.index}
               ply={sel}
               edit={edits[sel.index]}
               onEdit={(v) => setEdit(sel.index, v)}
-              onPrev={() => setSelected(Math.max(0, sel.index - 1))}
-              onNext={() => setSelected(Math.min(analysis.plies.length - 1, sel.index + 1))}
-              flipped={flipped}
-              onFlip={() => {
-                setFlipped(!flipped);
-                save(FLIP_STORAGE, !flipped);
-              }}
+              editing={editing}
+              onToggleBoard={() => setBoardEdit({ index: sel.index, on: !editing })}
             />
           ) : (
-            <p>Select a move.</p>
+            <div className="detail">
+              <h2>Starting position</h2>
+              <p className="hint">Step through the game with the buttons under the moves, or the arrow keys. Tap a move to check it.</p>
+            </div>
           )}
+        </section>
+        <section className="panel photo-panel" aria-label="Scoresheet photo">
+          <PhotoViewer images={session.images} />
         </section>
       </div>
 
@@ -248,8 +245,8 @@ function Review({
   );
 }
 
-function nextToCheck(a: Analysis, from: number | null): number {
-  const start = (from ?? -1) + 1;
+function nextToCheck(a: Analysis, from: number): number {
+  const start = from + 1;
   const after = a.plies.slice(start).find((p) => p.status !== "ok" && p.status !== "unchecked");
   return (after ?? a.plies.find((p) => p.status !== "ok" && p.status !== "unchecked") ?? a.plies[0]).index;
 }
@@ -282,96 +279,25 @@ function PhotoViewer({ images }: { images: string[] }) {
   );
 }
 
-function MoveGrid({
-  analysis,
-  edits,
-  selected,
-  onSelect,
-}: {
-  analysis: Analysis;
-  edits: Record<number, string>;
-  selected: number | null;
-  onSelect: (i: number) => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.querySelector<HTMLElement>(".cell.selected")?.scrollIntoView({ block: "nearest" });
-  }, [selected]);
-  const rows: { number: number; w?: PlyResult; b?: PlyResult }[] = [];
-  for (const p of analysis.plies) {
-    let row = rows.at(-1);
-    if (!row || row.number !== p.moveNumber) rows.push((row = { number: p.moveNumber }));
-    row[p.color] = p;
-  }
-  const cell = (p?: PlyResult) =>
-    p ? (
-      <button
-        type="button"
-        className={`cell st-${p.status}${selected === p.index ? " selected" : ""}`}
-        onClick={() => onSelect(p.index)}
-        title={STATUS_LABEL[p.status]}
-        aria-label={`${plyLabel(p)} ${p.inserted ? `${p.inserted.san} (not on the sheet) then ` : ""}${cellText(p, edits)}, ${STATUS_LABEL[p.status]}`}
-      >
-        {p.inserted && (
-          <span className="ins" aria-hidden="true">
-            +{p.inserted.san}{" "}
-          </span>
-        )}
-        {cellText(p, edits)}
-      </button>
-    ) : (
-      <span className="cell empty" />
-    );
-  return (
-    <div className="grid-scroll" ref={ref}>
-      <table className="moves">
-        <thead>
-          <tr>
-            <th scope="col">#</th>
-            <th scope="col">White</th>
-            <th scope="col">Black</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.number}>
-              <th scope="row">{r.number}</th>
-              <td>{cell(r.w)}</td>
-              <td>{cell(r.b)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function PlyDetail({
+/** What is known about the selected move, and the ways to fix it. */
+function Commentary({
   ply,
   edit,
   onEdit,
-  onPrev,
-  onNext,
-  flipped,
-  onFlip,
+  editing,
+  onToggleBoard,
 }: {
   ply: PlyResult;
   edit: string | undefined;
   onEdit: (v: string | null) => void;
-  onPrev: () => void;
-  onNext: () => void;
-  flipped: boolean;
-  onFlip: () => void;
+  editing: boolean;
+  onToggleBoard: () => void;
 }) {
   const [text, setText] = useState(edit ?? ply.san ?? ply.reading?.san ?? "");
-  const [onBoard, setOnBoard] = useState(ply.status === "illegal");
   const [missing, setMissing] = useState<string | null>(null);
   const r = ply.reading;
   const side = ply.color === "w" ? "White" : "Black";
   const canPlay = Boolean(ply.fenBefore) && ply.status !== "skipped";
-  const showBefore = onBoard && canPlay;
-  const fen = showBefore ? ply.fenBefore : (ply.fenAfter ?? ply.fenBefore);
-  const last = !showBefore && ply.fenAfter ? moveSquares(ply.fenBefore, ply.san) : null;
   const current = ply.san ?? edit ?? r?.san ?? r?.written ?? "";
   const withInsert = (san: string) => (ply.inserted ? `${ply.inserted.san} ${san}` : san);
   const apply = (v: string) => {
@@ -382,15 +308,9 @@ function PlyDetail({
   return (
     <div className="detail">
       <div className="row detail-head">
-        <button type="button" className="secondary small" onClick={onPrev} aria-label="Previous move">
-          ←
-        </button>
         <h2>
-          {plyLabel(ply)} {side}
+          {plyLabel(ply)} {ply.san ?? side}
         </h2>
-        <button type="button" className="secondary small" onClick={onNext} aria-label="Next move">
-          →
-        </button>
         <span className={`badge st-${ply.status}`}>{STATUS_LABEL[ply.status]}</span>
       </div>
 
@@ -467,11 +387,18 @@ function PlyDetail({
             aria-describedby="move-edit-hint"
           />
           <button type="submit">Use</button>
+          {canPlay && (
+            <button type="button" className="secondary" onClick={onToggleBoard} aria-pressed={editing}>
+              {editing ? "Show the move played" : "Change it on the board"}
+            </button>
+          )}
         </div>
         <p className="hint" id="move-edit-hint">
           {ply.status === "unchecked"
             ? "This move is checked once the move in red is fixed."
-            : "Type a move, or tap a piece and its square on the board."}
+            : editing
+              ? "Tap a piece on the board, then its square."
+              : "Type a move, pick one below, or change it on the board."}
         </p>
         {ply.suggestions.length > 0 && (
           <div className="chips" aria-label="Legal moves">
@@ -536,36 +463,6 @@ function PlyDetail({
             </button>
           </div>
         </form>
-      )}
-
-      {fen && (
-        <>
-          <div className="row board-tools">
-            {canPlay && (
-              <button type="button" className="secondary small" onClick={() => setOnBoard((b) => !b)} aria-pressed={showBefore}>
-                {showBefore ? "Show the move played" : "Change it on the board"}
-              </button>
-            )}
-            <button type="button" className="secondary small" onClick={onFlip}>
-              Flip board
-            </button>
-          </div>
-          <Board
-            fen={fen}
-            lastMove={last}
-            flipped={flipped}
-            onMove={showBefore ? (san) => onEdit(withInsert(san)) : undefined}
-            caption={
-              showBefore
-                ? `${side} to move: tap a piece, then its square`
-                : ply.san
-                  ? `After ${ply.label} ${ply.san}`
-                  : ply.status === "skipped"
-                    ? "Position when the entry was left out"
-                    : `Before ${ply.label ?? plyLabel(ply)}, ${side} to move`
-            }
-          />
-        </>
       )}
     </div>
   );

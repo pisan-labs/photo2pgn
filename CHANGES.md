@@ -41,3 +41,5 @@
 2026-11-12 [code] local-then-gateway asks the queue only while a CLI reader is running (heartbeat, PGN_READER_IDLE_SECONDS 60); else gateway at once. netlify.app→hintwise.org 301; manifest type
 
 2026-11-12 [note] 5 real sheets via CLI reader: Opus 5.5 exact on WCh g14 (116/116), all legal; Sonnet 5.5 73/116 there. ~90 output tok/move+~1k thinking; ≈$0.09-0.15/sheet at API prices
+
+2026-11-12 [code] Review is an analysis board: board left, moves right, start/back/forward/end buttons and keys, move notes below; walnut squares from chess-analyzer

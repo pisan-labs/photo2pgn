@@ -16,9 +16,10 @@
   --illegal-bg: #fbe0dd;
   --illegal-line: #c23b2e;
   --unchecked: #9aa1ab;
-  --sq-light: #ece3cf;
-  --sq-dark: #b08a62;
-  --sq-hl: rgba(255, 214, 79, 0.65);
+  /* "Walnut wood", the board style of chess-analyzer, in both themes. */
+  --sq-light: #e9c99b;
+  --sq-dark: #a06a43;
+  --sq-hl: rgba(155, 199, 0, 0.45);
   --radius: 10px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.04);
   color-scheme: light;
@@ -41,8 +42,6 @@
     --illegal-bg: #45201c;
     --illegal-line: #ee6b5d;
     --unchecked: #6b737e;
-    --sq-light: #c9bda4;
-    --sq-dark: #8c6a47;
     --shadow: none;
     color-scheme: dark;
   }
@@ -408,7 +407,7 @@ label.inline {
 .review-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(0, 1.25fr) minmax(220px, 0.7fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
 }
 
@@ -419,15 +418,6 @@ label.inline {
 .review-grid.two {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   margin-top: 16px;
-}
-
-@media (max-width: 1100px) {
-  .review-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .photo-panel {
-    grid-column: 1 / -1;
-  }
 }
 
 @media (max-width: 720px) {
@@ -635,13 +625,14 @@ table.moves {
 .board {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
   aspect-ratio: 1;
   width: 100%;
-  max-width: 360px;
   margin: 0 auto;
-  border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  container-type: inline-size;
 }
 
 .sq {
@@ -664,14 +655,11 @@ table.moves {
 
 .pc {
   font-size: clamp(18px, 4.6vw, 36px);
+  font-size: 10.5cqw;
   line-height: 1;
   font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", serif;
-}
-
-@media (min-width: 1100px) {
-  .pc {
-    font-size: 32px;
-  }
+  font-variant-emoji: text;
+  user-select: none;
 }
 
 .pc.white {
@@ -686,20 +674,32 @@ table.moves {
   color: #111;
 }
 
+/* Coordinates inside the edge squares, in the other square colour. */
 .coord {
   position: absolute;
   font-size: 10px;
-  color: rgba(0, 0, 0, 0.55);
+  font-size: max(9px, 2.4cqw);
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.sq.light .coord {
+  color: var(--sq-dark);
+}
+
+.sq.dark .coord {
+  color: var(--sq-light);
 }
 
 .coord.rank {
-  top: 2px;
-  left: 3px;
+  top: 3px;
+  right: 3px;
 }
 
 .coord.file {
-  bottom: 1px;
-  right: 3px;
+  bottom: 2px;
+  left: 3px;
 }
 
 .board-wrap figcaption {
@@ -996,4 +996,204 @@ a.button {
 .games li .hint {
   margin: 0;
   flex: 1;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The game as an analysis board: board left; players, moves and the buttons
+   right, as tall as the board. On a phone: board, buttons, moves. */
+.game-view {
+  display: grid;
+  grid-template-columns: minmax(0, 560px) minmax(220px, 340px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "board players"
+    "board moves"
+    "board controls";
+  gap: 0 16px;
+  justify-content: center;
+  align-items: start;
+}
+
+.gv-board {
+  grid-area: board;
+  min-width: 0;
+  position: relative;
+}
+
+/* Under the board without adding to its height, so the buttons line up with its edge. */
+.game-view {
+  padding-bottom: 40px;
+}
+
+.gv-board figcaption {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 8px;
+}
+
+.gv-players {
+  grid-area: players;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: color-mix(in srgb, var(--line) 35%, var(--panel));
+  font-weight: 600;
+}
+
+.gv-player {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.gv-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #555;
+}
+
+.gv-dot.white {
+  background: #fff;
+}
+
+.gv-dot.black {
+  background: #222;
+}
+
+.gv-result {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* As tall as the board on a wide screen: the list scrolls, not the page. */
+.gv-moves {
+  grid-area: moves;
+  align-self: stretch;
+  height: 0;
+  min-height: 100%;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.gv-moves table.moves {
+  border-collapse: collapse;
+}
+
+.gv-moves .moves tbody th {
+  width: 2.6em;
+  padding: 0 8px 0 0;
+  text-align: right;
+  color: var(--muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--line) 35%, var(--panel));
+  border-right: 1px solid var(--line);
+}
+
+.gv-moves .moves td {
+  width: 50%;
+  padding: 1px 2px;
+}
+
+.gv-moves .cell {
+  font-size: 1rem;
+  border-radius: 4px;
+  min-height: 34px;
+}
+
+.gv-moves .cell.selected {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: none;
+  text-decoration-color: #fff;
+}
+
+.gv-moves .cell.selected .ins {
+  color: #fff;
+}
+
+.gv-controls {
+  grid-area: controls;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+
+.gv-btn {
+  display: grid;
+  place-items: center;
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--line) 35%, var(--panel));
+  color: var(--text);
+}
+
+.gv-btn + .gv-btn {
+  border-left: 1px solid var(--line);
+}
+
+.gv-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.gv-btn:disabled {
+  color: var(--unchecked);
+  cursor: default;
+}
+
+.gv-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .gv-board figcaption {
+    position: static;
+    margin-top: 6px;
+  }
+  .game-view {
+    padding-bottom: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas:
+      "board"
+      "controls"
+      "players"
+      "moves";
+    gap: 0;
+  }
+  .gv-controls {
+    border-radius: 8px;
+    margin: 4px 0 12px;
+  }
+  .gv-moves {
+    height: auto;
+    min-height: 0;
+    max-height: 40vh;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0 0 8px 8px;
+  }
 }

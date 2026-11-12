@@ -1,7 +1,8 @@
 import { Chess, type Square } from "chess.js";
 import { useMemo, useState } from "react";
 
-const GLYPH: Record<string, string> = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+// U+FE0E asks for the text glyph: some phones draw ♟ as an emoji otherwise.
+const GLYPH: Record<string, string> = { k: "♚\uFE0E", q: "♛\uFE0E", r: "♜\uFE0E", b: "♝\uFE0E", n: "♞\uFE0E", p: "♟\uFE0E" };
 const FILES = "abcdefgh";
 const PROMOTIONS = [
   ["q", "♛", "Queen"],
@@ -75,7 +76,7 @@ export function Board({ fen, lastMove, caption, flipped = false, onMove }: Props
             const content = (
               <>
                 {cell && <span className={`pc ${cell.color === "w" ? "white" : "black"}`}>{GLYPH[cell.type]}</span>}
-                {fi === 0 && <span className="coord rank">{8 - r}</span>}
+                {fi === 7 && <span className="coord rank">{8 - r}</span>}
                 {ri === 7 && <span className="coord file">{FILES[f]}</span>}
               </>
             );
@@ -113,15 +114,4 @@ export function Board({ fen, lastMove, caption, flipped = false, onMove }: Props
       {caption && <figcaption>{caption}</figcaption>}
     </figure>
   );
-}
-
-/** From and to squares of a SAN move in a position, for highlighting. */
-export function moveSquares(fenBefore: string | null, san: string | null) {
-  if (!fenBefore || !san) return null;
-  try {
-    const m = new Chess(fenBefore).move(san);
-    return { from: m.from, to: m.to };
-  } catch {
-    return null;
-  }
 }
