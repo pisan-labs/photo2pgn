@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UploadPanel } from "./components/UploadPanel";
-import { OUT_OF_CREDITS_STORAGE, outOfCreditsFrom, stillOut, type AccessOption, type OutOfCredits } from "./lib/access";
+import { OUT_OF_CREDITS_STORAGE, displayName, outOfCreditsFrom, stillOut, type AccessOption, type OutOfCredits } from "./lib/access";
 import { checkAllowance, creditsOf, outMarkOf, type Allowance } from "./lib/allowance";
 import { ReviewPanel, type ReviewSession } from "./components/ReviewPanel";
 import { SignInPanel, useUser } from "./components/SignIn";
 import { fitPhotos, type PreparedImage } from "./lib/image";
 import { getByokKey, setByokKey } from "./lib/llm";
-import { currentToken } from "./lib/auth";
+import { currentToken, signOut } from "./lib/auth";
 import { ApiError, type QueuedJob } from "./lib/api";
 import { describeError, followQueued, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
 import { load, remove, save } from "./lib/storage";
@@ -227,18 +227,31 @@ export default function App() {
             <small>Scoresheet photos to PGN files</small>
           </span>
         </a>
-        <span className="row">
-          {canInstall && (
-            <button type="button" className="secondary small" onClick={install}>
-              Install app
+        {/* Signed out, the first step offers the sign-in; signed in: who, and Sign out.
+            The name opens the account panel (Delete my account). */}
+        {user && (
+          <span className="row account">
+            <button
+              type="button"
+              className="link account-name"
+              onClick={() => setSignInOpen((o) => !o)}
+              aria-expanded={signInOpen}
+              title="Your account"
+            >
+              {displayName(user)}
             </button>
-          )}
-          {signInAvailable && (
-            <button type="button" className="secondary small" onClick={() => setSignInOpen((o) => !o)} aria-expanded={signInOpen}>
-              {user ? (user.email ?? "Account") : "Sign in"}
+            <button
+              type="button"
+              className="secondary small"
+              onClick={() => {
+                setSignInOpen(false);
+                void signOut();
+              }}
+            >
+              Sign out
             </button>
-          )}
-        </span>
+          </span>
+        )}
       </header>
       <SignInPanel open={signInOpen} signedIn={Boolean(user)} onClose={() => setSignInOpen(false)} />
 
@@ -257,6 +270,15 @@ export default function App() {
               Take a photo of a handwritten tournament scoresheet. Claude reads the moves, a chess engine checks each one
               is legal, you fix anything doubtful, and you download a PGN file.
             </p>
+            {canInstall && (
+              <p className="install-tip">
+                Tip:{" "}
+                <button type="button" className="link" onClick={install}>
+                  install Photo to PGN
+                </button>{" "}
+                to open it like a native mobile app.
+              </p>
+            )}
             {iosTip && (
               <p className="install-tip">
                 Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like a native mobile app.

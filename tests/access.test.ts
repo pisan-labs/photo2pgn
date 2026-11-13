@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { CapReached } from "../src/lib/llm";
 import { ApiError } from "../src/lib/api";
-import { accessOptions, isOwnKey, nextRenewal, outMessage, outOfCreditsFrom, readyToRead, renewalLine, stillOut } from "../src/lib/access";
+import { accessOptions, displayName, isOwnKey, nextRenewal, outMessage, outOfCreditsFrom, readyToRead, renewalLine, stillOut } from "../src/lib/access";
 
 describe("the ways in", () => {
   it("offers sign-in and the own key, or only the own key", () => {
@@ -64,5 +64,15 @@ describe("new credits", () => {
     expect(nextRenewal(new Date("2026-11-13T07:00:00Z")).toISOString()).toBe("2026-11-14T00:00:00.000Z");
     expect(nextRenewal(new Date("2026-11-13T23:59:59Z")).toISOString()).toBe("2026-11-14T00:00:00.000Z");
     expect(renewalLine(new Date("2026-11-13T07:00:00Z"), "en-US")).toMatch(/^New credits every day at \d{1,2}:00\s?[AP]M\.$/);
+  });
+});
+
+describe("who is signed in", () => {
+  it("shows the name from the sign-in provider, else the email", () => {
+    expect(displayName({ email: "y@uw.edu", user_metadata: { full_name: " Yusuf Pisan " } })).toBe("Yusuf Pisan");
+    expect(displayName({ email: "y@uw.edu", user_metadata: { name: "Yusuf" } })).toBe("Yusuf");
+    expect(displayName({ email: "y@uw.edu", user_metadata: { full_name: "  " } })).toBe("y@uw.edu");
+    expect(displayName({ email: "y@uw.edu" })).toBe("y@uw.edu");
+    expect(displayName({})).toBe("Your account");
   });
 });

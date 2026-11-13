@@ -79,3 +79,10 @@ export function renewalLine(now = new Date(), locale?: string): string {
   const at = nextRenewal(now).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
   return `New credits every day at ${at}.`;
 }
+
+/** The person's name from their sign-in provider, else their email address. */
+export function displayName(user: { email?: string | null; user_metadata?: Record<string, unknown> }): string {
+  const m = user.user_metadata ?? {};
+  const name = [m.full_name, m.name].find((v): v is string => typeof v === "string" && v.trim() !== "");
+  return name?.trim() ?? user.email ?? "Your account";
+}

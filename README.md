@@ -13,7 +13,7 @@ For players, coaches, arbiters and club volunteers who have a pile of paper scor
 
 The demo button runs the whole review on a sample game with no account and no key.
 
-**On a phone** it works like a native mobile app: add it to the home screen (Install app on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it.
+**On a phone** it works like a native mobile app: add it to the home screen (the "install Photo to PGN" tip on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it.
 
 ## Sign in, or use your own key
 
@@ -30,7 +30,7 @@ Buying credits would be a third way in, offered to a person who is out (`src/lib
 - **Your games** (what was read, your corrections and notes, and the PGN, never the photos) are kept in this browser. When you are signed in they are also kept in your HintWise account, in Supabase (US East), where only you can see them. Delete a game from My games.
 - **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
 - **Lichess:** "Open in Lichess" imports the game there, and imported games are public on Lichess. Nothing is sent to Lichess or Chess.com unless you press their button.
-- **Delete my account:** sign in, open the account panel (top right), and choose "Delete my account". It deletes your account and your data in every HintWise app, saved games included.
+- **Delete my account:** sign in, click your name at the top right to open the account panel, and choose "Delete my account". It deletes your account and your data in every HintWise app, saved games included.
 
 ## An honest limitation
 

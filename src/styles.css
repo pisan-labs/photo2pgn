@@ -1249,3 +1249,18 @@ a.button {
 .dropzone.disabled {
   opacity: 0.6;
 }
+
+/* Signed in: the name (opens the account panel) and Sign out, top right. */
+.top .account {
+  width: auto;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.account-name {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
