@@ -61,3 +61,5 @@
 2026-11-13 [doc] Drafts: terms, refund (14 days) and privacy pages, HintWise as seller, Paddle as Merchant of Record; packs 20/$5, 50/$10; not linked until the owner approves
 
 2026-11-13 [code] "Use my N credits, new credits at <time>" from the gateway check mode (Plabs, live: 3 a day, 9 a week); template llm.ts recopied; legal drafts moved to legal/ (not served)
+
+2026-11-13 [decision] Owner: legal pages approved (California law, HintWise as seller, 14-day refunds, children wording); they go live with paid credits

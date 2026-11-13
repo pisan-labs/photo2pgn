@@ -29,6 +29,7 @@ describe("legal pages", () => {
   it("terms: the seller, Paddle as Merchant of Record, the prices and the free amounts", () => {
     const t = text(read("terms"));
     expect(t).toContain("provided by HintWise");
+    expect(t).toContain("laws of the State of California, USA"); // owner, 13 Nov
     expect(t).toContain("Our order process is conducted by our online reseller Paddle.com. Paddle.com is the Merchant of Record for all our orders.");
     for (const p of CREDIT_PACKS) {
       expect(t).toContain(`${p.credits} credits`);
