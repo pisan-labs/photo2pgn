@@ -368,6 +368,43 @@ label.inline {
   animation: spin 1s linear infinite;
 }
 
+/* Sheets with the HintWise reader */
+
+.readings-wait {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.readings-wait p {
+  margin: 0;
+}
+
+.spinner.small {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 2px 0 0;
+  border-width: 3px;
+}
+
+.readings-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.readings-ready,
+.readings .error {
+  margin: 10px 0 0;
+}
+
+.readings > :first-child {
+  margin-top: 0;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

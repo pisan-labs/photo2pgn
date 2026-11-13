@@ -52,9 +52,11 @@ describe("legal pages", () => {
     // The admin's list of users (owner, 13 Nov): what is kept, and who sees it.
     expect(t).toContain("when you first and last used it");
     expect(t).toContain("HintWise's admins can see each person's email address, use and credits");
-    // Photos never wait on the server while public readings go through the gateway only;
-    // turning the HintWise reader back on needs this page to say so again.
-    expect(readFileSync("netlify.toml", "utf8")).toContain('VITE_FREE_READER = "gateway"');
-    expect(t).not.toContain("for up to a day");
+    // The HintWise reader reads public sheets (owner, 13 Nov): photos and readings
+    // can wait on the server, and this page must say so while it does.
+    const reader = /VITE_FREE_READER = "(local|local-then-gateway)"/.test(readFileSync("netlify.toml", "utf8"));
+    expect(reader).toBe(true);
+    expect(t).toContain("wait on HintWise's server (Netlify) until Claude reads them");
+    expect(t).toContain("at the latest after a day");
   });
 });

@@ -77,3 +77,9 @@
 2026-11-13 [code] Review: tap a piece of the side that moved to replay the move; click the selected move again for ranked alternatives; compact move panel under the buttons
 
 2026-11-13 [code] List users: name and games columns (Plabs live, owner yes); 0003_admin_counts.sql copied byte for byte from claude-built-apps 1b6fc57; migrations pinned by sha256
+
+2026-11-13 [code] Board: drag a piece to its new square (tap-tap still works); the new move shows at once instead of flashing through the old analysis
+
+2026-11-13 [decision] Owner: halflife reads everyone's sheets for now (VITE_FREE_READER local-then-gateway); 1 sheet = 1 credit either way; the page does not wait
+
+2026-11-13 [code] Queued sheets: "check back in 1-3 minutes"; GET/DELETE /api/my-jobs; the page collects finished readings into My games (job id = game id); privacy draft says photos can wait

@@ -10,12 +10,10 @@
   VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFya3R4bHJseWNlZmZ5b3pkd2hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODEwMTAsImV4cCI6MjA5MjQ1NzAxMH0.Vuku-irT3kAHZYibK23q6dpyOEqV_Eg5zB78I3dyshE"
   # Free readings: "gateway" (default), "local" (the owner's CLI reader) or
   # "local-then-gateway" (the CLI reader when it is running, else the gateway
-  # at once; the gateway also after VITE_LOCAL_FALLBACK_SECONDS unclaimed).
-  # Owner, 13 Nov: the gateway only, so every reading counts as a credit and
-  # photos never wait on the server. Turning the reader back on for the public
-  # needs the privacy page to say so again (tests/legal.test.ts).
-  VITE_FREE_READER = "gateway"
-  VITE_LOCAL_FALLBACK_SECONDS = "120"
+  # at once). Owner, 13 Nov: the HintWise reader (halflife) reads everyone's
+  # sheets for now; the page does not wait, the game arrives in My games.
+  # The privacy page says photos can wait on the server (tests/legal.test.ts).
+  VITE_FREE_READER = "local-then-gateway"
 
 [functions]
   node_bundler = "esbuild"

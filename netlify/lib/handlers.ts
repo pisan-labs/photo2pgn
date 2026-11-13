@@ -6,8 +6,11 @@
 // claims the job, reads it with a local Claude Code on the owner's
 // subscription, and posts the reading back (/api/worker/*). The browser polls
 // GET /api/jobs/:id, and may cancel (DELETE) to read through the HintWise
-// gateway instead. Photos are deleted once the job finishes, and jobs after
-// a day. No Anthropic key is involved anywhere on this side.
+// gateway instead. The browser does not wait: the person's own jobs are
+// listed (GET /api/my-jobs), a finished reading is put in their My games and
+// then deleted here (DELETE /api/my-jobs/:id), on whichever device they come
+// back on. Photos are deleted once the job finishes, and jobs after a day.
+// No Anthropic key is involved anywhere on this side.
 import type { AppConfig } from "./config";
 import type { KV } from "./kv";
 import { sha256Hex, userFrom, type UserVerifier } from "./auth";
@@ -164,14 +167,19 @@ export async function handleConvert(req: Request, deps: Deps): Promise<Response>
       images.map((img, n) => deps.jobs.setBytes(`img/${id}/${n}`, decodeBase64(img.data), { mediaType: img.mediaType })),
     );
     await deps.jobs.setJSON(`job/${id}`, job);
+    await deps.jobs.setJSON(mineKey(user.id, id), { createdAt: job.createdAt });
     await deps.jobs.setJSON(`queue/${id}`, { createdAt: job.createdAt });
   } catch (err) {
     console.error("convert: could not queue", id, err instanceof Error ? err.message : err);
     await finishJob(deps, job, { status: "error", error: { code: "start_failed", message: "Could not queue the photos." } });
     return fail(502, "start_failed", "Could not queue the photos. Try again.");
   }
-  return json(202, { jobId: id, viewToken });
+  return json(202, { jobId: id, viewToken, createdAt: job.createdAt });
 }
+
+/** The index of a person's jobs: one key per job, so listing reads only theirs. */
+const mineKey = (userId: string, jobId: string) => `mine/${userId}/${jobId}`;
+const mineKeyOf = (job: Job) => (job.identity.startsWith("user:") ? mineKey(job.identity.slice(5), job.id) : null);
 
 async function deleteImages(deps: Deps, job: Job) {
   await Promise.all(Array.from({ length: job.imageCount }, (_, n) => deps.jobs.delete(`img/${job.id}/${n}`)));
@@ -217,13 +225,72 @@ export async function handleJob(req: Request, id: string | undefined, deps: Deps
     return json(200, { ok: true });
   }
 
-  const pending = job.status === "queued" || job.status === "running";
-  if (pending && nowOf(deps).getTime() - new Date(job.createdAt).getTime() > deps.config.localTimeoutMs) {
-    const message = "No reader picked up these photos in time. Try again later, or use your own API key.";
-    await finishJob(deps, job, { status: "error", error: { code: "timeout", message } });
-    job = (await deps.jobs.getJSON<Job>(`job/${job.id}`))?.value ?? job;
-  }
+  job = await timedOut(deps, job);
   return json(200, { id: job.id, status: job.status, result: job.result, error: job.error });
+}
+
+/** A job still waiting after the time limit is failed (and given back to the allowance). */
+async function timedOut(deps: Deps, job: Job): Promise<Job> {
+  const pending = job.status === "queued" || job.status === "running";
+  if (!pending || nowOf(deps).getTime() - new Date(job.createdAt).getTime() <= deps.config.localTimeoutMs) return job;
+  const message = "No reader picked up these photos in time. Try again, or use your own API key.";
+  await finishJob(deps, job, { status: "error", error: { code: "timeout", message } });
+  return (await deps.jobs.getJSON<Job>(`job/${job.id}`))?.value ?? job;
+}
+
+export interface MyJob {
+  id: string;
+  status: Job["status"];
+  createdAt: string;
+  updatedAt: string;
+  imageCount: number;
+  result?: Extraction;
+  error?: { code: string; message: string };
+}
+
+/**
+ * GET /api/my-jobs: the signed-in person's readings, oldest first, with the
+ * reading once done.  DELETE /api/my-jobs/:id: forget one, once its game is
+ * saved or its failure seen; one still waiting is cancelled first.
+ */
+export async function handleMyJobs(req: Request, id: string | undefined, deps: Deps): Promise<Response> {
+  const user = await userFrom(req, deps.verifyUser);
+  if (!user) return fail(401, "sign_in", "Sign in to see your readings.");
+  const identity = `user:${user.id}`;
+
+  if (req.method === "DELETE") {
+    const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
+    if (!entry || entry.value.identity !== identity) return fail(404, "not_found", "No such reading.");
+    const job = entry.value;
+    if (job.status === "queued" || job.status === "running") {
+      await finishJob(deps, job, { status: "error", error: { code: "cancelled", message: "Cancelled." } });
+    }
+    await deps.jobs.delete(`job/${job.id}`);
+    await deps.jobs.delete(mineKey(user.id, job.id));
+    return json(200, { ok: true });
+  }
+  if (req.method !== "GET") return fail(405, "method", "Use GET or DELETE.");
+
+  const jobs: MyJob[] = [];
+  for (const key of await deps.jobs.list(`mine/${user.id}/`)) {
+    const entry = await deps.jobs.getJSON<Job>(`job/${key.slice(key.lastIndexOf("/") + 1)}`);
+    if (!entry || entry.value.identity !== identity) {
+      await deps.jobs.delete(key); // cleaned up after a day
+      continue;
+    }
+    const job = await timedOut(deps, entry.value);
+    jobs.push({
+      id: job.id,
+      status: job.status,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      imageCount: job.imageCount,
+      ...(job.result ? { result: job.result } : {}),
+      ...(job.error ? { error: job.error } : {}),
+    });
+  }
+  jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return json(200, { jobs });
 }
 
 // ---- CLI reader endpoints (Authorization: Bearer PGN_WORKER_TOKEN) ----
@@ -377,6 +444,8 @@ export async function cleanupJobs(deps: Deps, maxAgeMs = 24 * 60 * 60 * 1000): P
     if (!job || now - new Date(job.createdAt).getTime() < maxAgeMs) continue;
     await deleteImages(deps, job);
     await deps.jobs.delete(`queue/${job.id}`);
+    const mine = mineKeyOf(job);
+    if (mine) await deps.jobs.delete(mine);
     await deps.jobs.delete(key);
     removed++;
   }

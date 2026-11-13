@@ -19,14 +19,14 @@ The demo button runs the whole review on a sample game with no account and no ke
 
 The page offers two ways in, and the photo step opens once one is set up:
 
-- **Sign in** (Google, or a sign-in link by email). Claude reads with HintWise's key through the HintWise gateway, within the person's credits: 3 free readings a UTC day and 9 an ISO week, then any credits they have been given or have bought (one credit, one game). The page shows "Use my N credits" and when new free ones come, from the gateway's check. When they run out, the page says until when and offers only the next option.
+- **Sign in** (Google, or a sign-in link by email). While the HintWise reader is running (owner, 13 Nov: it reads everyone's sheets for now), the photos go to it and the page does not wait: it says to check back in 1–3 minutes, and the game appears in My games on whichever device the person signs in on. Otherwise Claude reads with HintWise's key through the HintWise gateway, within the person's credits: 3 free readings a UTC day and 9 an ISO week, then any credits they have been given or have bought (one credit, one game). The page shows "Use my N credits" and when new free ones come, from the gateway's check. When they run out, the page says until when and offers only the next option.
 - **Your own Anthropic API key.** No account. The key goes only from your browser to Anthropic; HintWise never sees it. Tick "Remember on this device" to keep it in this browser.
 
 **Admins** (people the owner adds with the platform's admin workflow) see an "Admin: add credits" panel on the start page: an email address and a whole number of credits (negative takes them back, never below zero), through the platform's `credits-grant` function (`src/lib/grant.ts`). "List users" shows everyone who has used photo2pgn, most recent first, with their free readings left, credits and readings, a Grant button per person and "Copy emails" (people are noted on every check and reading; before 13 Nov only those who read or saved a game are known). Buying credits, through Paddle, comes next; the packs and the free amounts live in `src/lib/credits.ts`.
 
 ## What is stored, and where
 
-- **Your photos** go from your browser to Claude to be read and are not kept. (The HintWise reader, below, would keep photos on HintWise's server, in Netlify Blobs, for up to a day and have them read by Claude Code on the owner's computer; it is off for the public since 13 Nov, and this page and the privacy policy must say so again before it is turned back on.) With your own API key, photos never go to HintWise's server.
+- **Your photos** go from your browser to Claude to be read and are not kept, with one exception: when you are signed in and the HintWise reader (below) is running, your photos wait on HintWise's server (Netlify Blobs) until Claude Code on the HintWise owner's computer reads them. They are deleted once read, and at the latest after a day. The reading waits there too until your browser collects it into My games (at most a day). With your own API key, photos never go to HintWise's server.
 - **Your games** (what was read, your corrections and notes, and the PGN, never the photos) are kept in this browser. When you are signed in they are also kept in your HintWise account, in Supabase (US East), where only you can see them. Delete a game from My games.
 - **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
 - **Lichess:** "Open in Lichess" imports the game there, and imported games are public on Lichess. Nothing is sent to Lichess or Chess.com unless you press their button.
@@ -63,6 +63,7 @@ reader:   browser ── session token ─▶ /api/convert ─▶ queue (Netlify
                                                         ▲ list, claim │ photos, prompt, schema
           cli/pgn-worker.mjs (owner's machine) ─────────┘             ▼
              └─ claude -p (subscription) ─▶ reading ─▶ POST result ─▶ checked against the schema
+          browser ── session token ─▶ GET /api/my-jobs ─▶ the reading ─▶ My games ─▶ DELETE /api/my-jobs/:id
 ```
 
 The gateway passes only `model`, `max_tokens`, `system`, `messages` and `tools`, so Claude answers by calling one tool, `record_scoresheet`, whose input is checked against `src/lib/schema.ts`. Photos are shrunk in the browser to 1568 px and the request to under 1,000,000 bytes. The sign-in, gateway and account code in `src/lib/{supabase,auth,account,llm,signin-styles}.ts` is the HintWise platform template, unchanged apart from the app name.
@@ -85,7 +86,9 @@ node cli/pgn-worker.mjs --site https://photo2pgn.hintwise.org           # keep w
 - It never bills per token: `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from claude's environment, and the CLI stops if claude reports any API key in use (`--allow-api-key` overrides).
 - A failed reading goes back in the queue up to 3 times, then the visitor sees an error and the reading is not counted.
 - The CLI checks in each time it asks for work. A reader counts as running when it checked in within `PGN_READER_IDLE_SECONDS` (default 60; keep it above the CLI's `--interval`), or is reading a job whose lease has not ended.
-- With `local-then-gateway`, a reading goes to the queue only while a reader is running; otherwise, or when the queue is off or unreachable, it goes through the gateway at once. A queued job no reader has claimed within `VITE_LOCAL_FALLBACK_SECONDS` (default 120) is cancelled and read through the gateway. With `local`, a job waits up to `PGN_LOCAL_TIMEOUT_MINUTES` (default 30), so readings can pile up for a later `--once`.
+- The page does not wait for a queued reading. It says to check back in 1–3 minutes, and asks for the person's readings (`GET /api/my-jobs`) on each visit and every 20 s while one is waiting (`src/lib/collect.ts`, `src/components/Readings.tsx`). A finished one is saved in My games under the job's id, so two devices collecting it at once save one game, and then forgotten on the server (`DELETE /api/my-jobs/:id`, which also cancels one still waiting). A failed one is shown until dismissed. A sheet sent from a Chess TD hand-off opens by itself when it is read, so it can be sent back.
+- With `local-then-gateway`, a reading goes to the queue only while a reader is running; otherwise, when the queue is off or unreachable, or when the reader's own ceiling (`PGN_READER_*`) is reached, it goes through the gateway at once, and the gateway's count of the person's credits decides. With `local`, a job waits for a reader. Either way a job no reader picks up fails after `PGN_LOCAL_TIMEOUT_MINUTES` (default 30) and is not counted.
+- Credits: a sheet is meant to cost one credit whichever way it is read (owner, 13 Nov). Readings by the HintWise reader do not take a credit yet: the gateway has no way to charge for them. Plabs is designing it (charge once per finished job, from a photo2pgn function holding a platform secret; failed jobs never charged). Until then the reader's own ceilings (`PGN_READER_*`) are the limit, and "Use my N credits" does not go down for them.
 - Open question for the owner: whether serving public visitors through a personal Claude subscription fits that subscription's terms. Check them before relying on this path for public traffic.
 - To keep it running on a Mac, start it from a launchd agent or a `tmux` session. It keeps going through network blips and stops on setup problems (wrong token, missing `claude`).
 
@@ -109,8 +112,7 @@ Build (`netlify.toml`, all public):
 | Variable | Default | Meaning |
 |---|---|---|
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | HintWise's | Sign-in and the gateway (public by design) |
-| `VITE_FREE_READER` | `gateway` (owner, 13 Nov: every reading counts as a credit) | `gateway`, `local` or `local-then-gateway` |
-| `VITE_LOCAL_FALLBACK_SECONDS` | `120` | `local-then-gateway`: wait this long for the HintWise reader |
+| `VITE_FREE_READER` | `local-then-gateway` (owner, 13 Nov: the HintWise reader reads everyone's sheets for now) | `gateway`, `local` or `local-then-gateway` |
 
 Netlify Functions (only needed for the HintWise reader; every name starts with `PGN_`, so nothing meant for other tools is picked up):
 

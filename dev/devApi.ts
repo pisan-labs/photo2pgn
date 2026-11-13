@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadConfig } from "../netlify/lib/config";
 import { memoryKV } from "../netlify/lib/kv";
 import { supabaseVerifier, type UserVerifier } from "../netlify/lib/auth";
-import { handleConvert, handleJob, handleWorkerClaim, handleWorkerList, handleWorkerResult, type Deps } from "../netlify/lib/handlers";
+import { handleConvert, handleJob, handleMyJobs, handleWorkerClaim, handleWorkerList, handleWorkerResult, type Deps } from "../netlify/lib/handlers";
 
 async function toRequest(req: IncomingMessage): Promise<Request> {
   const chunks: Buffer[] = [];
@@ -40,6 +40,8 @@ export function apiListener(deps: Deps) {
       if (path === "/api/convert") return send(res, await handleConvert(request, deps));
       const m = /^\/api\/jobs\/([^/]+)$/.exec(path);
       if (m) return send(res, await handleJob(request, decodeURIComponent(m[1]), deps));
+      const mine = /^\/api\/my-jobs(?:\/([^/]+))?$/.exec(path);
+      if (mine) return send(res, await handleMyJobs(request, mine[1] && decodeURIComponent(mine[1]), deps));
       if (path === "/api/worker/jobs") return send(res, await handleWorkerList(request, deps));
       const w = /^\/api\/worker\/jobs\/([^/]+)\/(claim|result)$/.exec(path);
       if (w && w[2] === "claim") return send(res, await handleWorkerClaim(request, decodeURIComponent(w[1]), deps));

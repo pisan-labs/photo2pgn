@@ -113,6 +113,11 @@ export class Library {
     return { games, accountError };
   }
 
+  /** The game is saved on this device. */
+  async has(id: string): Promise<boolean> {
+    return (await this.device.get(id)) !== undefined;
+  }
+
   /** Save on the device, then to the account; an account failure is reported, not thrown. */
   async save(game: SavedGame): Promise<{ accountError: string | null }> {
     await this.device.put(game);

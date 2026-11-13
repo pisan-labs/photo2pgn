@@ -7,14 +7,15 @@ import { SignInPanel, useUser } from "./components/SignIn";
 import { fitPhotos, type PreparedImage } from "./lib/image";
 import { getByokKey, setByokKey } from "./lib/llm";
 import { currentToken, signOut } from "./lib/auth";
-import { ApiError, type QueuedJob } from "./lib/api";
-import { describeError, followQueued, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
-import { load, remove, save } from "./lib/storage";
+import { ApiError, forgetJob } from "./lib/api";
+import { describeError, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
+import { load, save } from "./lib/storage";
 import { Library, LocalRepository, type SavedGame } from "./lib/library";
 import { newId, SupabaseRepository } from "./lib/repository";
 import { getSupabase } from "./lib/supabase";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { AdminCredits } from "./components/AdminCredits";
+import { ReadingsPanel, useReadings } from "./components/Readings";
 import { takeSharedPhotos } from "./lib/shared";
 import { useInstall } from "./lib/install";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
@@ -23,13 +24,8 @@ import { HandoffBanner, useHandoff } from "./components/Handoff";
 import { applyHints } from "./lib/handoff";
 
 const LIBRARY_STORAGE = "photo2pgn.games";
-const PENDING_STORAGE = "photo2pgn.pending";
 const MAX_PAGES = 2;
 const FREE_READER = freeReaderFrom();
-
-interface PendingJob extends QueuedJob {
-  startedAt: number;
-}
 
 type View = { kind: "upload" } | { kind: "reading"; startedAt: number; phase: Phase } | { kind: "review" };
 
@@ -41,20 +37,10 @@ function savedKey(): string {
   }
 }
 
-function pendingJob(): PendingJob | null {
-  const pending = load<PendingJob>(PENDING_STORAGE);
-  if (pending && Date.now() - pending.startedAt < 32 * 60 * 1000) return pending;
-  remove(PENDING_STORAGE);
-  return null;
-}
-
 export default function App() {
   const [signInOpen, setSignInOpen] = useState(false);
   const { user, available: signInAvailable } = useUser(() => setSignInOpen(false));
-  const [resume] = useState(pendingJob);
-  const [view, setView] = useState<View>(() =>
-    resume ? { kind: "reading", startedAt: resume.startedAt, phase: "queued" } : { kind: "upload" },
-  );
+  const [view, setView] = useState<View>({ kind: "upload" });
   const [pages, setPages] = useState<PreparedImage[]>([]);
   const [choice, setChoice] = useState<AccessOption>(() => (signInAvailable && !savedKey() ? "sign-in" : "own-key"));
   // Out of credits: remembered per person until the reset, when it lapses by itself.
@@ -116,6 +102,31 @@ export default function App() {
   const [sentToChessTd, setSentToChessTd] = useState(false);
   const hinted = (h: GameHeaders) => (handoff ? applyHints(h, handoff.hints) : h);
 
+  // Sheets sent to the HintWise reader: collected into My games when read.
+  // A sheet sent from this page keeps its photos for the review, and the one
+  // Chess TD asked for opens by itself.
+  const photosOf = useRef(new Map<string, string[]>());
+  const handoffJob = useRef<string | null>(null);
+  const openGame = (g: SavedGame) => {
+    setSession({ id: g.id, extraction: g.game.extraction, edits: g.game.edits, headers: g.game.headers, notes: g.game.notes, images: photosOf.current.get(g.id) ?? [], demo: false });
+    setView({ kind: "review" });
+  };
+  const readings = useReadings({
+    enabled: Boolean(user) && signInAvailable && FREE_READER !== "gateway",
+    library,
+    getToken: () => currentToken(),
+    headersFor: (id, h) => (id === handoffJob.current ? hinted(h) : h),
+    onSaved: (games) => {
+      setSavedTick((t) => t + 1);
+      const asked = games.find((g) => g.id === handoffJob.current);
+      if (asked && view.kind === "upload") {
+        handoffJob.current = null;
+        readings.dismissReady(asked.id);
+        openGame(asked);
+      }
+    },
+  });
+
   // Photos shared from the phone's gallery (Android share sheet).
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -135,7 +146,6 @@ export default function App() {
   }, [rememberKey, apiKey]);
 
   function finished(extraction: Extraction, images: string[]) {
-    remove(PENDING_STORAGE);
     setSession({ id: newId(), extraction, edits: {}, headers: hinted(extraction.headers), images, demo: false });
     setView({ kind: "review" });
   }
@@ -143,7 +153,6 @@ export default function App() {
   function failed(err: unknown) {
     setView({ kind: "upload" });
     if (err instanceof ApiError && err.code === "cancelled") return;
-    remove(PENDING_STORAGE);
     const mark = user ? outOfCreditsFrom(err, user.id) : null;
     if (mark) {
       // The notice above the choices says until when; only the own key is offered meanwhile.
@@ -157,50 +166,48 @@ export default function App() {
     setError(message);
   }
 
-  // A reload or a locked phone while queued for the HintWise reader: pick the job up again.
-  const following = useRef(false);
-  useEffect(() => {
-    if (!resume || following.current) return;
-    following.current = true;
-    const ctrl = new AbortController();
-    abort.current = ctrl;
-    const onPhase = (phase: Phase) => setView({ kind: "reading", startedAt: resume.startedAt, phase });
-    followQueued(resume, { mode: "free", reader: "local", signal: ctrl.signal, onPhase })
-      .then((ex) => {
-        remove(PENDING_STORAGE);
-        setSession({ id: newId(), extraction: ex, edits: {}, headers: handoff ? applyHints(ex.headers, handoff.hints) : ex.headers, images: [], demo: false });
-        setView({ kind: "review" });
-      })
-      .catch((err) => {
-        setView({ kind: "upload" });
-        remove(PENDING_STORAGE);
-        if (!(err instanceof ApiError && err.code === "cancelled")) setError(describeError(err).message);
-      });
-  }, [resume, handoff]);
-
   async function convert() {
     setError(null);
     const startedAt = Date.now();
     const ctrl = new AbortController();
     abort.current = ctrl;
-    setView({ kind: "reading", startedAt, phase: "reading" });
+    const queued = choice === "sign-in" && FREE_READER !== "gateway";
+    setView({ kind: "reading", startedAt, phase: queued ? "sending" : "reading" });
     try {
       const photos = await fitPhotos(pages);
-      const extraction = await readPhotos(
+      const outcome = await readPhotos(
         photos.map((p) => ({ mediaType: p.mediaType, data: p.data })),
         {
           mode: choice === "sign-in" ? "free" : "own-key",
           apiKey: apiKey.trim(),
           reader: FREE_READER,
-          signal: ctrl.signal,
           getToken: signInAvailable ? () => currentToken() : async () => null,
-          onPhase: (phase) => setView({ kind: "reading", startedAt, phase }),
-          onQueued: (job) => save(PENDING_STORAGE, { ...job, startedAt }),
+          onPhase: (phase) => {
+            if (!ctrl.signal.aborted) setView({ kind: "reading", startedAt, phase });
+          },
         },
       );
-      finished(extraction, photos.map((p) => p.previewUrl));
+      const previews = photos.map((p) => p.previewUrl);
+      if (outcome.kind === "read") {
+        if (!ctrl.signal.aborted) finished(outcome.extraction, previews);
+        return;
+      }
+      const { job } = outcome;
+      if (ctrl.signal.aborted) {
+        // Cancelled while the photos were on their way: take them back.
+        const token = await currentToken();
+        if (token) await forgetJob(job.jobId, token).catch(() => undefined);
+        return;
+      }
+      // Sent: the page does not wait. The game arrives in My games.
+      photosOf.current.set(job.jobId, previews);
+      if (handoff) handoffJob.current = job.jobId;
+      const at = job.createdAt ?? new Date().toISOString();
+      readings.added({ id: job.jobId, status: "queued", createdAt: at, updatedAt: at, imageCount: photos.length });
+      setPages([]);
+      setView({ kind: "upload" });
     } catch (err) {
-      failed(err);
+      if (!ctrl.signal.aborted) failed(err);
     }
   }
 
@@ -267,6 +274,16 @@ export default function App() {
         )}
         {view.kind === "upload" && (
           <>
+            <ReadingsPanel
+              state={readings.state}
+              onOpen={(g) => {
+                readings.dismissReady(g.id);
+                openGame(g);
+              }}
+              onCancel={readings.cancel}
+              onDismissFailed={readings.dismissFailed}
+              onDismissReady={readings.dismissReady}
+            />
             <p className="lede">
               Take a photo of a handwritten tournament scoresheet. Claude reads the moves, a chess engine checks each one
               is legal, you fix anything doubtful, and you download a PGN file.
@@ -311,10 +328,7 @@ export default function App() {
               signedIn={Boolean(user)}
               signInAvailable={signInAvailable}
               refresh={savedTick}
-              onOpen={(g) => {
-                setSession({ id: g.id, extraction: g.game.extraction, edits: g.game.edits, headers: g.game.headers, notes: g.game.notes, images: [], demo: false });
-                setView({ kind: "review" });
-              }}
+              onOpen={openGame}
             />
             {credits?.admin && <AdminCredits onChanged={() => setChecks((c) => c + 1)} />}
           </>
@@ -326,7 +340,6 @@ export default function App() {
             phase={view.phase}
             pages={pages}
             onCancel={() => {
-              remove(PENDING_STORAGE);
               abort.current?.abort();
               setView({ kind: "upload" });
             }}
@@ -375,10 +388,10 @@ function Reading({
     return () => clearInterval(t);
   }, []);
   const secs = Math.floor((now - startedAt) / 1000);
-  const title = phase === "queued" ? "Waiting for the HintWise reader…" : "Reading the handwriting…";
+  const title = phase === "sending" ? "Sending your photos…" : "Reading the handwriting…";
   const text =
-    phase === "queued"
-      ? "Your photos are in line to be read. You can leave this page open, or come back to it later on this device."
+    phase === "sending"
+      ? "They go to the HintWise reader. You will not have to wait here for it."
       : "A full sheet usually takes under a minute; HintWise follows the game as it reads to sort out unclear moves. Keep this page open.";
   return (
     <section className="panel reading" aria-live="polite">

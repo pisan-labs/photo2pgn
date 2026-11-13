@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
 import { CapReached, GatewayError, LlmUnavailable, type AnthropicLike, type Message } from "../src/lib/llm";
 import { READ_TOOL_NAME, ReadFailed } from "../src/lib/read";
-import { ApiError, cancelJob, queueForReader, waitForJob } from "../src/lib/api";
-import { capMessage, describeError, fallbackMsFrom, freeReaderFrom, readPhotos } from "../src/lib/reading";
+import { ApiError, forgetJob, listMyJobs, queueForReader } from "../src/lib/api";
+import { capMessage, describeError, freeReaderFrom, readPhotos, type ReadOutcome } from "../src/lib/reading";
 import { extraction, rowsFrom, OPERA_GAME } from "./helpers";
 
 const photos = [{ mediaType: "image/jpeg" as const, data: btoa("jpeg") }];
@@ -19,16 +19,20 @@ const reply = {
   usage: { input_tokens: 1, output_tokens: 1 },
 } as unknown as Message;
 
+const read = (o: ReadOutcome) => {
+  if (o.kind !== "read") throw new Error(`expected a reading, got ${o.kind}`);
+  return o.extraction;
+};
+
 const gatewayOk = () =>
   vi.fn(async () => new Response(JSON.stringify(reply), { status: 200, headers: { "content-type": "application/json" } }));
 
 describe("settings from the build", () => {
-  it("defaults to the gateway and a two-minute fallback", () => {
+  it("defaults to the gateway", () => {
     expect(freeReaderFrom({})).toBe("gateway");
     expect(freeReaderFrom({ VITE_FREE_READER: "local-then-gateway" })).toBe("local-then-gateway");
+    expect(freeReaderFrom({ VITE_FREE_READER: "local" })).toBe("local");
     expect(freeReaderFrom({ VITE_FREE_READER: "nonsense" })).toBe("gateway");
-    expect(fallbackMsFrom({})).toBe(120_000);
-    expect(fallbackMsFrom({ VITE_LOCAL_FALLBACK_SECONDS: "45" })).toBe(45_000);
   });
 });
 
@@ -37,7 +41,7 @@ describe("readPhotos", () => {
     const create = vi.fn(async (_b: unknown) => reply);
     const createAnthropic = vi.fn((_k: string): AnthropicLike => ({ messages: { create } }));
     const phases: string[] = [];
-    const ex = await readPhotos(photos, { mode: "own-key", apiKey: "sk-ant-x", ask: { createAnthropic }, onPhase: (p) => phases.push(p) });
+    const ex = read(await readPhotos(photos, { mode: "own-key", apiKey: "sk-ant-x", ask: { createAnthropic }, onPhase: (p) => phases.push(p) }));
     expect(ex.headers.white).toBe("Morphy, Paul");
     expect(createAnthropic).toHaveBeenCalledWith("sk-ant-x");
     expect(phases).toEqual(["reading"]);
@@ -45,84 +49,53 @@ describe("readPhotos", () => {
 
   it("free, gateway: sends the session token", async () => {
     const fetch = gatewayOk();
-    const ex = await readPhotos(photos, {
-      mode: "free",
-      reader: "gateway",
-      getToken: async () => "tok",
-      ask: { fetch, gatewayUrl: "https://gw.test" },
-    });
+    const ex = read(
+      await readPhotos(photos, {
+        mode: "free",
+        reader: "gateway",
+        getToken: async () => "tok",
+        ask: { fetch, gatewayUrl: "https://gw.test" },
+      }),
+    );
     expect(ex.rows).toHaveLength(17);
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("free, local: queues with the token and follows the job", async () => {
-    const queue = vi.fn(async () => ({ jobId: "j", viewToken: "v" }));
+  it("free, local: queues with the token and returns at once, without waiting for the reading", async () => {
+    const queue = vi.fn(async () => ({ jobId: "j", viewToken: "v", createdAt: "2026-11-13T10:00:00Z" }));
     const phases: string[] = [];
-    const ex = await readPhotos(photos, {
-      mode: "free",
-      reader: "local",
-      getToken: async () => "tok",
-      queue,
-      onPhase: (p) => phases.push(p),
-      wait: async (_job, opts) => {
-        opts.onStatus?.("running");
-        return EX;
-      },
-    });
-    expect(ex.rows).toHaveLength(17);
+    const outcome = await readPhotos(photos, { mode: "free", reader: "local", getToken: async () => "tok", queue, onPhase: (p) => phases.push(p) });
+    expect(outcome).toEqual({ kind: "queued", job: { jobId: "j", viewToken: "v", createdAt: "2026-11-13T10:00:00Z" } });
     expect(queue).toHaveBeenCalledWith(photos, "tok", undefined, { onlyIfReaderRunning: false });
-    expect(phases).toEqual(["queued", "local"]);
+    expect(phases).toEqual(["sending"]);
   });
 
   it("free, local: needs sign-in", async () => {
     await expect(readPhotos(photos, { mode: "free", reader: "local", getToken: async () => null })).rejects.toBeInstanceOf(LlmUnavailable);
   });
 
-  it("local-then-gateway: gives up on the queue in time, cancels, and reads through the gateway", async () => {
-    let t = 0;
-    const cancel = vi.fn(async () => undefined);
-    const fetch = gatewayOk();
-    const ex = await readPhotos(photos, {
-      mode: "free",
-      reader: "local-then-gateway",
-      fallbackMs: 60_000,
-      now: () => t,
-      getToken: async () => "tok",
-      queue: async () => ({ jobId: "j", viewToken: "v" }),
-      cancel,
-      ask: { fetch, gatewayUrl: "https://gw.test" },
-      wait: async (_job, opts) => {
-        for (;;) {
-          t += 30_000;
-          opts.onStatus?.("queued");
-          if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
-        }
-      },
-    });
-    expect(ex.rows).toHaveLength(17);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-
-  it("local-then-gateway: reads through the gateway at once when the queue is off or out of reach", async () => {
-    for (const code of ["reader_off", "reader_idle", "network", "start_failed"]) {
+  it("local-then-gateway: reads through the gateway at once when the reader cannot take the photos", async () => {
+    // Its own ceiling too: a sheet costs a credit either way, and the gateway counts them.
+    for (const code of ["reader_off", "reader_idle", "network", "start_failed", "limit_day"]) {
       const fetch = gatewayOk();
-      const ex = await readPhotos(photos, {
-        mode: "free",
-        reader: "local-then-gateway",
-        getToken: async () => "tok",
-        queue: async (_p, _t, _f, opts) => {
-          expect(opts).toEqual({ onlyIfReaderRunning: true });
-          throw new ApiError(code, "queue unavailable");
-        },
-        ask: { fetch, gatewayUrl: "https://gw.test" },
-      });
+      const ex = read(
+        await readPhotos(photos, {
+          mode: "free",
+          reader: "local-then-gateway",
+          getToken: async () => "tok",
+          queue: async (_p, _t, _f, opts) => {
+            expect(opts).toEqual({ onlyIfReaderRunning: true });
+            throw new ApiError(code, "queue unavailable");
+          },
+          ask: { fetch, gatewayUrl: "https://gw.test" },
+        }),
+      );
       expect(ex.rows).toHaveLength(17);
       expect(fetch).toHaveBeenCalledOnce();
     }
   });
 
-  it("local: a queue that is off is an error; a used-up reader allowance is never bypassed", async () => {
+  it("local: a queue that is off, or a used-up reader allowance, is an error (no other way to read)", async () => {
     const off = async () => {
       throw new ApiError("reader_off", "The HintWise reader is not running.");
     };
@@ -130,32 +103,12 @@ describe("readPhotos", () => {
     const used = async () => {
       throw new ApiError("limit_day", "Used up");
     };
-    await expect(
-      readPhotos(photos, { mode: "free", reader: "local-then-gateway", getToken: async () => "tok", queue: used }),
-    ).rejects.toMatchObject({ code: "limit_day" });
-  });
-
-  it("local-then-gateway: keeps waiting once the reader has the job", async () => {
-    let t = 0;
-    const cancel = vi.fn(async () => undefined);
-    const ex = await readPhotos(photos, {
-      mode: "free",
-      reader: "local-then-gateway",
-      fallbackMs: 60_000,
-      now: () => t,
-      getToken: async () => "tok",
-      queue: async () => ({ jobId: "j", viewToken: "v" }),
-      cancel,
-      wait: async (_job, opts) => {
-        t += 30_000;
-        opts.onStatus?.("running");
-        t += 300_000;
-        opts.onStatus?.("running");
-        return EX;
-      },
-    });
-    expect(ex.rows).toHaveLength(17);
-    expect(cancel).not.toHaveBeenCalled();
+    await expect(readPhotos(photos, { mode: "free", reader: "local", getToken: async () => "tok", queue: used })).rejects.toMatchObject({ code: "limit_day" });
+    // Anything but the queue's own answers is passed on, even with the gateway behind it.
+    const broken = async () => {
+      throw new TypeError("bug");
+    };
+    await expect(readPhotos(photos, { mode: "free", reader: "local-then-gateway", getToken: async () => "tok", queue: broken })).rejects.toBeInstanceOf(TypeError);
   });
 });
 
@@ -196,32 +149,29 @@ describe("queue client", () => {
     };
     await expect(queueForReader(photos, "tok", down as unknown as typeof fetch)).rejects.toMatchObject({ code: "network" });
   });
-  it("polls until done, ignoring a few network blips", async () => {
-    const answers = [new TypeError("blip"), json(200, { status: "queued" }), json(200, { status: "done", result: EX })];
-    const fetch = vi.fn(async () => {
-      const a = answers.shift()!;
-      if (a instanceof Error) throw a;
-      return a;
+  it("lists the person's readings and forgets one, with the token", async () => {
+    const list = vi.fn(async () => json(200, { jobs: [{ id: "j", status: "queued" }] }));
+    expect(await listMyJobs("tok", list as unknown as typeof fetch)).toEqual([{ id: "j", status: "queued" }]);
+    const [url, init] = list.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/my-jobs");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer tok");
+    expect(await listMyJobs("tok", (async () => json(200, {})) as unknown as typeof fetch)).toEqual([]);
+    await expect(listMyJobs("tok", (async () => json(401, { error: { code: "sign_in", message: "Sign in" } })) as unknown as typeof fetch)).rejects.toMatchObject({
+      code: "sign_in",
     });
-    const seen: string[] = [];
-    const ex = await waitForJob({ jobId: "j", viewToken: "v" }, { fetch: fetch as unknown as typeof globalThis.fetch, sleep: async () => undefined, onStatus: (s) => seen.push(s) });
-    expect(ex.rows).toHaveLength(17);
-    expect(seen).toEqual(["queued", "done"]);
-  });
-  it("stops on an error answer, a missing job, or a cancel", async () => {
-    const err = async () => json(200, { status: "error", error: { code: "timeout", message: "Too slow" } });
-    await expect(waitForJob({ jobId: "j", viewToken: "v" }, { fetch: err as unknown as typeof fetch, sleep: async () => undefined })).rejects.toMatchObject({ code: "timeout" });
-    const gone = async () => json(404, { error: { code: "not_found", message: "No" } });
-    await expect(waitForJob({ jobId: "j", viewToken: "v" }, { fetch: gone as unknown as typeof fetch, sleep: async () => undefined })).rejects.toMatchObject({ code: "not_found" });
-    const ctrl = new AbortController();
-    ctrl.abort();
-    await expect(waitForJob({ jobId: "j", viewToken: "v" }, { signal: ctrl.signal })).rejects.toMatchObject({ code: "cancelled" });
-  });
-  it("cancels with DELETE and never throws", async () => {
-    const fetch = vi.fn(async () => {
+    const down = async () => {
       throw new TypeError("offline");
-    });
-    await cancelJob({ jobId: "j", viewToken: "v" }, fetch as unknown as typeof globalThis.fetch);
-    expect((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].method).toBe("DELETE");
+    };
+    await expect(listMyJobs("tok", down as unknown as typeof fetch)).rejects.toMatchObject({ code: "network" });
+
+    const del = vi.fn(async () => json(200, { ok: true }));
+    await forgetJob("a/b", "tok", del as unknown as typeof fetch);
+    const [delUrl, delInit] = del.mock.calls[0] as unknown as [string, RequestInit];
+    expect(delUrl).toBe("/api/my-jobs/a%2Fb");
+    expect(delInit.method).toBe("DELETE");
+    // Already gone is fine; anything else is reported.
+    await forgetJob("j", "tok", (async () => json(404, { error: { code: "not_found", message: "No" } })) as unknown as typeof fetch);
+    await expect(forgetJob("j", "tok", (async () => json(500, {})) as unknown as typeof fetch)).rejects.toMatchObject({ code: "error" });
+    await expect(forgetJob("j", "tok", down as unknown as typeof fetch)).rejects.toMatchObject({ code: "network" });
   });
 });

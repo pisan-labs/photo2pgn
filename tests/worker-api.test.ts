@@ -9,6 +9,7 @@ import {
   cleanupQuota,
   handleConvert,
   handleJob,
+  handleMyJobs,
   handleWorkerClaim,
   handleWorkerList,
   handleWorkerResult,
@@ -71,6 +72,11 @@ function setup(env: Record<string, string> = {}) {
         id,
         deps,
       );
+      return { status: res.status, body: await res.json() };
+    },
+    mine: async (who: string | null = "alice", id?: string, method = "GET") => {
+      const headers: Record<string, string> = who ? { authorization: `Bearer ${who}-token` } : {};
+      const res = await handleMyJobs(new Request(`https://app.test/api/my-jobs${id ? `/${id}` : ""}`, { method, headers }), id, deps);
       return { status: res.status, body: await res.json() };
     },
     used: async (who = "alice") => (await getQuota(deps.quota, `user:${who}`, LIMITS, clock)).day.used,
@@ -259,6 +265,59 @@ describe("queue", () => {
     const { call } = setup();
     const { body: job } = await call.convert();
     expect(await call.job(job.jobId, "nope")).toMatchObject({ error: { code: "not_found" } });
+  });
+
+  it("lists a person's own readings, with the reading once done, and forgets one when asked", async () => {
+    const { call, setClock } = setup();
+    const { body: first } = await call.convert("alice");
+    setClock(new Date("2026-11-12T10:01:00Z"));
+    const { body: second } = await call.convert("alice");
+    await call.convert("bob");
+    expect(first.createdAt).toBe("2026-11-12T10:00:00.000Z");
+
+    const waiting = await call.mine("alice");
+    expect(waiting.body.jobs.map((j: { id: string; status: string }) => [j.id, j.status])).toEqual([
+      [first.jobId, "queued"],
+      [second.jobId, "queued"],
+    ]);
+    const claim = await call.claim(first.jobId);
+    await call.result(first.jobId, { leaseToken: claim.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) });
+    const [done] = (await call.mine("alice")).body.jobs;
+    expect(done).toMatchObject({ id: first.jobId, status: "done", imageCount: 1 });
+    expect(done.result.rows).toHaveLength(17);
+
+    // Saved in My games: forget it here. Nobody else can.
+    expect((await call.mine("bob", first.jobId, "DELETE")).status).toBe(404);
+    expect((await call.mine("alice", first.jobId, "DELETE")).body).toEqual({ ok: true });
+    expect((await call.mine("alice", first.jobId, "DELETE")).status).toBe(404);
+    expect((await call.mine("alice")).body.jobs.map((j: { id: string }) => j.id)).toEqual([second.jobId]);
+    expect((await call.mine("bob")).body.jobs).toHaveLength(1);
+    expect(await call.used("alice")).toBe(2);
+  });
+
+  it("cancels a reading still waiting when it is forgotten, with a refund", async () => {
+    const { call } = setup();
+    const { body: job } = await call.convert();
+    expect(await call.used()).toBe(1);
+    expect((await call.mine("alice", job.jobId, "DELETE")).status).toBe(200);
+    expect((await call.list()).body.jobs).toEqual([]);
+    expect(await call.used()).toBe(0);
+    expect((await call.mine("alice")).body.jobs).toEqual([]);
+  });
+
+  it("fails a reading nobody picked up in time, and needs a sign-in", async () => {
+    const { deps, call, setClock } = setup();
+    const { body: job } = await call.convert();
+    setClock(new Date("2026-11-12T10:31:00Z"));
+    expect((await call.mine()).body.jobs).toMatchObject([{ id: job.jobId, status: "error", error: { code: "timeout" } }]);
+    expect(await call.used()).toBe(0);
+    expect((await call.mine(null)).status).toBe(401);
+    const post = await handleMyJobs(new Request("https://app.test/api/my-jobs", { method: "POST", headers: { authorization: "Bearer alice-token" } }), undefined, deps);
+    expect(post.status).toBe(405);
+    // A job cleaned up after a day leaves no stale entry behind.
+    await deps.jobs.delete(`job/${job.jobId}`);
+    expect((await call.mine()).body.jobs).toEqual([]);
+    expect(await deps.jobs.list("mine/")).toEqual([]);
   });
 
   it("validates photos", async () => {

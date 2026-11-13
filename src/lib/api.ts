@@ -1,4 +1,5 @@
-// Browser side of the queue for the HintWise reader (the owner's CLI).
+// Browser side of the queue for the HintWise reader (the owner's CLI): queue
+// photos, list the person's readings, forget one once collected.
 import type { Extraction } from "./schema";
 import type { PhotoInput } from "./read";
 
@@ -15,6 +16,7 @@ export class ApiError extends Error {
 export interface QueuedJob {
   jobId: string;
   viewToken: string;
+  createdAt?: string;
 }
 
 async function parse(res: Response): Promise<Record<string, unknown>> {
@@ -58,51 +60,37 @@ export async function queueForReader(
   return body as unknown as QueuedJob;
 }
 
-export async function cancelJob(job: QueuedJob, doFetch: typeof fetch = fetch): Promise<void> {
-  const url = `/api/jobs/${encodeURIComponent(job.jobId)}?token=${encodeURIComponent(job.viewToken)}`;
-  await doFetch(url, { method: "DELETE" }).catch(() => undefined);
+/** One of the signed-in person's readings by the HintWise reader. */
+export interface MyJob {
+  id: string;
+  status: "queued" | "running" | "done" | "error";
+  createdAt: string;
+  updatedAt: string;
+  imageCount: number;
+  result?: Extraction;
+  error?: { code: string; message: string };
 }
 
-export interface WaitOptions {
-  signal?: AbortSignal;
-  intervalMs?: number;
-  timeoutMs?: number;
-  onStatus?: (status: string) => void;
-  fetch?: typeof fetch;
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
-}
-
-/** Poll a queued job until it is done. */
-export async function waitForJob(job: QueuedJob, opts: WaitOptions = {}): Promise<Extraction> {
-  const doFetch = opts.fetch ?? fetch;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-  const now = opts.now ?? Date.now;
-  const interval = opts.intervalMs ?? 2500;
-  // The server gives up on a job after 30 minutes in the queue.
-  const deadline = now() + (opts.timeoutMs ?? 32 * 60 * 1000);
-  const url = `/api/jobs/${encodeURIComponent(job.jobId)}?token=${encodeURIComponent(job.viewToken)}`;
-  let failures = 0;
-  while (now() < deadline) {
-    if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
-    await sleep(interval);
-    if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
-    let body: Record<string, unknown>;
-    try {
-      const res = await doFetch(url, { signal: opts.signal });
-      body = await parse(res);
-      if (!res.ok) throw errorOf(body, res.status);
-      failures = 0;
-    } catch (err) {
-      if (opts.signal?.aborted) throw new ApiError("cancelled", "Cancelled.");
-      if (err instanceof ApiError && err.code === "not_found") throw err;
-      if (++failures >= 5) throw new ApiError("network", "Lost contact with the server.");
-      continue;
-    }
-    const status = String(body.status);
-    opts.onStatus?.(status);
-    if (status === "done") return body.result as Extraction;
-    if (status === "error") throw errorOf(body, 200);
+/** The signed-in person's readings, oldest first. */
+export async function listMyJobs(token: string, doFetch: typeof fetch = fetch): Promise<MyJob[]> {
+  let res: Response;
+  try {
+    res = await doFetch("/api/my-jobs", { headers: { authorization: `Bearer ${token}` } });
+  } catch {
+    throw new ApiError("network", "Could not reach the server.");
   }
-  throw new ApiError("timeout", "The reading took too long.");
+  const body = await parse(res);
+  if (!res.ok) throw errorOf(body, res.status);
+  return (body.jobs ?? []) as MyJob[];
+}
+
+/** Forget a reading on the server (its game is saved, or its failure seen); one still waiting is cancelled. */
+export async function forgetJob(id: string, token: string, doFetch: typeof fetch = fetch): Promise<void> {
+  let res: Response;
+  try {
+    res = await doFetch(`/api/my-jobs/${encodeURIComponent(id)}`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } });
+  } catch {
+    throw new ApiError("network", "Could not reach the server.");
+  }
+  if (!res.ok && res.status !== 404) throw errorOf(await parse(res), res.status);
 }
