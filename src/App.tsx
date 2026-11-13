@@ -16,6 +16,8 @@ import { getSupabase } from "./lib/supabase";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { AdminCredits } from "./components/AdminCredits";
 import { ReadingsPanel, useReadings } from "./components/Readings";
+import { BuyCredits } from "./components/BuyCredits";
+import { checkoutConfigFrom } from "./lib/checkout";
 import { takeSharedPhotos } from "./lib/shared";
 import { useInstall } from "./lib/install";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
@@ -26,6 +28,8 @@ import { applyHints } from "./lib/handoff";
 const LIBRARY_STORAGE = "photo2pgn.games";
 const MAX_PAGES = 2;
 const FREE_READER = freeReaderFrom();
+// Credits are for sale once the build has Paddle settings; until then admins see a preview.
+const CHECKOUT = checkoutConfigFrom();
 
 type View = { kind: "upload" } | { kind: "reading"; startedAt: number; phase: Phase } | { kind: "review" };
 
@@ -41,6 +45,8 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(false);
   const { user, available: signInAvailable } = useUser(() => setSignInOpen(false));
   const [view, setView] = useState<View>({ kind: "upload" });
+  // photo2pgn.hintwise.org/pricing opens the packs.
+  const [buying, setBuying] = useState(() => window.location.pathname === "/pricing");
   const [pages, setPages] = useState<PreparedImage[]>([]);
   const [choice, setChoice] = useState<AccessOption>(() => (signInAvailable && !savedKey() ? "sign-in" : "own-key"));
   // Out of credits: remembered per person until the reset, when it lapses by itself.
@@ -63,6 +69,7 @@ export default function App() {
   }, [user, signInAvailable, onStart, checks]);
   const checked = user && allowance ? allowance : null;
   const credits = checked ? creditsOf(checked) : null;
+  const canBuy = Boolean(CHECKOUT) || Boolean(credits?.admin);
   const out = checked && user ? outMarkOf(checked, user.id) : stillOut(outMark, user?.id ?? null);
   useEffect(() => {
     if (!out) return;
@@ -275,6 +282,21 @@ export default function App() {
         )}
         {view.kind === "upload" && (
           <>
+            {buying && canBuy && (
+              <BuyCredits
+                config={CHECKOUT}
+                buyer={user ? { userId: user.id, email: user.email ?? null } : null}
+                onSignIn={() => setSignInOpen(true)}
+                onClose={() => {
+                  setBuying(false);
+                  if (window.location.pathname === "/pricing") window.history.replaceState(null, "", "/");
+                }}
+                onPaid={() => {
+                  // The credits come with Paddle's confirmation: ask the gateway again shortly.
+                  for (const ms of [5000, 20000, 60000]) setTimeout(() => setChecks((c) => c + 1), ms);
+                }}
+              />
+            )}
             <ReadingsPanel
               state={readings.state}
               onOpen={(g) => {
@@ -323,6 +345,7 @@ export default function App() {
               onConvert={convert}
               onDemo={demo}
               incoming={incoming}
+              onBuy={canBuy ? () => setBuying(true) : undefined}
             />
             <LibraryPanel
               library={library}

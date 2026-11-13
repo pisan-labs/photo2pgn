@@ -368,6 +368,47 @@ label.inline {
   animation: spin 1s linear infinite;
 }
 
+/* Buying credits */
+
+.buy-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.packs {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  display: grid;
+  gap: 8px;
+}
+
+.packs li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.packs li span {
+  display: grid;
+}
+
+.packs small {
+  color: var(--muted);
+}
+
+.choice .buy-more {
+  justify-self: start;
+  margin-top: 4px;
+  font-size: 0.9rem;
+}
+
 /* Sheets with the HintWise reader */
 
 .readings-wait {

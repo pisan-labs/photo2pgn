@@ -27,6 +27,8 @@ interface Props {
   onDemo: () => void;
   /** Photos handed over by the share sheet, to add once. */
   incoming?: File[];
+  /** Offered when credits can be bought (or previewed by an admin). */
+  onBuy?: () => void;
 }
 
 export function UploadPanel(p: Props) {
@@ -78,7 +80,19 @@ export function UploadPanel(p: Props) {
       <h2 id="access-title">
         {options.length === 1 ? "1. Your Anthropic API key" : p.signedIn ? "1. Choose how to read it" : "1. Sign in, or use your own key"}
       </h2>
-      {p.out && <p className="notice">{outMessage(p.out)}</p>}
+      {p.out && (
+        <p className="notice">
+          {outMessage(p.out)}
+          {p.onBuy && (
+            <>
+              {" "}
+              <button type="button" className="link" onClick={p.onBuy}>
+                Buy credits
+              </button>
+            </>
+          )}
+        </p>
+      )}
       {options.length > 1 && (
         <div className="choices" role="radiogroup" aria-label="How Claude reads it">
           <label className={`choice${choice === "sign-in" ? " selected" : ""}`}>
@@ -94,6 +108,18 @@ export function UploadPanel(p: Props) {
               {!p.signedIn && choice === "sign-in" && (
                 <button type="button" className="small" onClick={p.onOpenSignIn}>
                   Sign in
+                </button>
+              )}
+              {p.signedIn && p.onBuy && (
+                <button
+                  type="button"
+                  className="link buy-more"
+                  onClick={(e) => {
+                    e.preventDefault(); // inside the label: do not also pick the choice
+                    p.onBuy?.();
+                  }}
+                >
+                  Buy more credits
                 </button>
               )}
             </span>
