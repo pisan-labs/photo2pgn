@@ -65,3 +65,5 @@
 2026-11-13 [decision] Owner: legal pages approved (California law, HintWise as seller, 14-day refunds, children wording); they go live with paid credits
 
 2026-11-13 [code] Header: no Install app or Sign in (step 1 offers sign-in); signed in: name or email (opens account panel) and Sign out; install tip moved under the intro
+
+2026-11-13 [decision] Owner: public readings through the gateway only (VITE_FREE_READER=gateway), so every reading counts as a credit; reader exception dropped from the privacy draft

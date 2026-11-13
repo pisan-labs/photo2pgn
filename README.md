@@ -26,7 +26,7 @@ Buying credits would be a third way in, offered to a person who is out (`src/lib
 
 ## What is stored, and where
 
-- **Your photos** go from your browser to Claude to be read and are not kept, with one exception: when you are signed in, your photos can be kept on HintWise's server (Netlify Blobs) for up to a day and read by Claude Code on the HintWise owner's computer (the HintWise reader, below). They are deleted once read, and at the latest after a day. With your own API key, photos never go to HintWise's server.
+- **Your photos** go from your browser to Claude to be read and are not kept. (The HintWise reader, below, would keep photos on HintWise's server, in Netlify Blobs, for up to a day and have them read by Claude Code on the owner's computer; it is off for the public since 13 Nov, and this page and the privacy policy must say so again before it is turned back on.) With your own API key, photos never go to HintWise's server.
 - **Your games** (what was read, your corrections and notes, and the PGN, never the photos) are kept in this browser. When you are signed in they are also kept in your HintWise account, in Supabase (US East), where only you can see them. Delete a game from My games.
 - **Your account**, if you sign in: your email address, kept by HintWise sign-in in Supabase (US East). It is one account for every HintWise app.
 - **Lichess:** "Open in Lichess" imports the game there, and imported games are public on Lichess. Nothing is sent to Lichess or Chess.com unless you press their button.
@@ -109,7 +109,7 @@ Build (`netlify.toml`, all public):
 | Variable | Default | Meaning |
 |---|---|---|
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | HintWise's | Sign-in and the gateway (public by design) |
-| `VITE_FREE_READER` | `local-then-gateway` (owner, 12 Nov) | `gateway`, `local` or `local-then-gateway` |
+| `VITE_FREE_READER` | `gateway` (owner, 13 Nov: every reading counts as a credit) | `gateway`, `local` or `local-then-gateway` |
 | `VITE_LOCAL_FALLBACK_SECONDS` | `120` | `local-then-gateway`: wait this long for the HintWise reader |
 
 Netlify Functions (only needed for the HintWise reader; every name starts with `PGN_`, so nothing meant for other tools is picked up):

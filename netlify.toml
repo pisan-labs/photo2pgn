@@ -11,7 +11,10 @@
   # Free readings: "gateway" (default), "local" (the owner's CLI reader) or
   # "local-then-gateway" (the CLI reader when it is running, else the gateway
   # at once; the gateway also after VITE_LOCAL_FALLBACK_SECONDS unclaimed).
-  VITE_FREE_READER = "local-then-gateway"
+  # Owner, 13 Nov: the gateway only, so every reading counts as a credit and
+  # photos never wait on the server. Turning the reader back on for the public
+  # needs the privacy page to say so again (tests/legal.test.ts).
+  VITE_FREE_READER = "gateway"
   VITE_LOCAL_FALLBACK_SECONDS = "120"
 
 [functions]

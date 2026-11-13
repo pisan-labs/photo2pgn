@@ -49,6 +49,9 @@ describe("legal pages", () => {
     const t = text(read("privacy"));
     for (const who of ["Anthropic", "Supabase", "Netlify", "Paddle", "Lichess", "Chess TD"]) expect(t).toContain(who);
     expect(t).toContain("builder@hintwise.org");
-    expect(t).toContain("for up to a day"); // the HintWise reader exception, as the README discloses
+    // Photos never wait on the server while public readings go through the gateway only;
+    // turning the HintWise reader back on needs this page to say so again.
+    expect(readFileSync("netlify.toml", "utf8")).toContain('VITE_FREE_READER = "gateway"');
+    expect(t).not.toContain("for up to a day");
   });
 });
