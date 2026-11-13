@@ -1,7 +1,7 @@
 // What the game viewer's board shows at each step.
 import { describe, expect, it } from "vitest";
 import { analyzeGame, rowsToPlies } from "../src/lib/repair";
-import { START, START_FEN, boardView, moveSquares, plyLabel, stepTo } from "../src/lib/view";
+import { START, START_FEN, boardView, manyFixes, moveSquares, plyLabel, stepTo } from "../src/lib/view";
 import { rowsFrom, OPERA_GAME } from "./helpers";
 
 const opera = analyzeGame(rowsToPlies(rowsFrom(OPERA_GAME)));
@@ -49,5 +49,15 @@ describe("helpers", () => {
     expect(moveSquares(START_FEN, "Nf3")).toEqual({ from: "g1", to: "f3" });
     expect(moveSquares(START_FEN, "Nf6")).toBeNull();
     expect(moveSquares(null, "e4")).toBeNull();
+  });
+});
+
+describe("many fixes", () => {
+  it("warns when a quarter of the moves were changed or guessed", () => {
+    expect(manyFixes(opera)).toBe(false);
+    const mark = (k: number) => ({ ...opera, plies: opera.plies.map((p, i) => (i < k ? { ...p, status: i % 2 ? ("guess" as const) : ("fixed" as const) } : p)) });
+    expect(manyFixes(mark(8))).toBe(false); // 8 of 33
+    expect(manyFixes(mark(9))).toBe(true); // 9 of 33
+    expect(manyFixes({ ...opera, plies: opera.plies.slice(0, 4).map((p) => ({ ...p, status: "guess" as const })) })).toBe(false); // too short to tell
   });
 });

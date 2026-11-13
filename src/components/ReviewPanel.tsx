@@ -11,7 +11,7 @@ import { CHESSCOM_ANALYSIS, canShareFiles, gameTitle, importToLichess, mailtoHre
 import { GameViewer, STATUS_LABEL } from "./GameViewer";
 import { SendToChessTd } from "./Handoff";
 import { resultMessage, type Handoff } from "../lib/handoff";
-import { START, boardView, plyLabel, stepTo } from "../lib/view";
+import { START, boardView, manyFixes, plyLabel, stepTo } from "../lib/view";
 
 export interface ReviewSession {
   id: string;
@@ -181,6 +181,11 @@ function Review({
             {counts.illegal > 0 && <li className="st-illegal">{counts.illegal} not legal</li>}
             {counts.unchecked > 0 && <li className="st-unchecked">{counts.unchecked} not checked yet</li>}
           </ul>
+          {manyFixes(analysis) && (
+            <p className="warn">
+              Many moves had to be changed or guessed. Check that the photo shows one game, or take it again flat and in good light.
+            </p>
+          )}
           {extraction.notes && !session.demo && <p className="hint">Note from the reading: {extraction.notes}</p>}
           {session.demo && <p className="hint">This is the demo game: a sample, not read from a photo.</p>}
         </div>

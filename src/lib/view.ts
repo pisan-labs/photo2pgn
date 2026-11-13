@@ -59,3 +59,11 @@ export function boardView(analysis: Analysis, selected: number, editing = false)
     editable: false,
   };
 }
+
+/** A quarter or more of the moves changed or guessed: maybe not one game, or a poor reading. */
+export const MANY_FIXES_SHARE = 0.25;
+export function manyFixes(analysis: Analysis): boolean {
+  const n = analysis.plies.length;
+  const changed = analysis.plies.filter((p) => p.status === "fixed" || p.status === "guess").length;
+  return n >= 8 && changed / n >= MANY_FIXES_SHARE;
+}
