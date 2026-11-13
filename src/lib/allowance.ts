@@ -3,6 +3,8 @@
 // token, as for a reading, answers without calling the model:
 //   { allowed, scope, resets_at, app_open, limits: [{scope, unit, used, cap, resets_at}], calls_left }
 // calls_left is exact (the minimum over the person's call caps, 0 when any cap refuses).
+// Since credits (13 Nov): allowed counts bought credits too, uses_credit says the
+// next reading spends one, credits is this app's balance and admin who may grant.
 import { GATEWAY_APP, gatewayUrl } from "./llm";
 import { currentToken } from "./auth";
 import type { OutOfCredits } from "./access";
@@ -17,11 +19,14 @@ export interface Limit {
 
 export interface Allowance {
   allowed: boolean;
+  uses_credit?: boolean;
   scope: string | null;
-  resets_at: string | null;
+  resets_at: string | null; // when free readings come back, while none are left
   app_open: boolean;
   limits: Limit[];
-  calls_left: number | null;
+  calls_left: number | null; // free readings left
+  credits?: number; // bought credits, this app
+  admin?: boolean;
 }
 
 export interface CheckDeps {
@@ -54,19 +59,36 @@ export async function checkAllowance(deps: CheckDeps = {}): Promise<Allowance | 
 }
 
 export interface Credits {
-  left: number | null;
-  /** When new credits come: the next day, or the next week when the week's limit binds. */
+  free: number | null; // free readings left
+  paid: number; // bought credits
+  left: number | null; // all of them
+  /** When new free credits come: the next day, or the next week when the week's limit binds. */
   renewsAt: string | null;
   out: boolean;
+  admin: boolean;
 }
 
 export function creditsOf(a: Allowance): Credits {
-  const out = !a.allowed || !a.app_open || a.calls_left === 0;
-  if (out) return { left: 0, renewsAt: a.resets_at, out: true };
+  const paid = typeof a.credits === "number" && a.credits > 0 ? a.credits : 0;
+  const free = a.calls_left;
+  const admin = a.admin === true;
+  // allowed already counts bought credits; an older gateway has none, so no free ones left is out.
+  const out = !a.allowed || !a.app_open || (free === 0 && paid === 0);
+  if (out) return { free: 0, paid, left: 0, renewsAt: a.resets_at, out: true, admin };
   const day = a.limits.find((l) => l.unit === "calls" && l.scope.includes("day"));
   const week = a.limits.find((l) => l.unit === "calls" && l.scope.includes("week"));
-  const weekBinds = Boolean(day && week && a.calls_left !== null && a.calls_left < day.cap - day.used);
-  return { left: a.calls_left, renewsAt: (weekBinds ? week : day)?.resets_at ?? null, out: false };
+  const weekBinds = Boolean(day && week && free !== null && free > 0 && free < day.cap - day.used);
+  const renewsAt = free === 0 ? a.resets_at : ((weekBinds ? week : day)?.resets_at ?? null);
+  return { free, paid, left: free === null ? paid || null : free + paid, renewsAt, out: false, admin };
+}
+
+/** The line under "Use my N credits". */
+export function creditsLine(c: Credits, now = new Date(), locale?: string): string {
+  const when = c.renewsAt ? whenLocal(c.renewsAt, now, locale) : null;
+  const renew = when ? (c.paid > 0 ? ` New free credits ${when}.` : ` New credits ${when}.`) : "";
+  if (c.paid > 0 && c.free) return `${c.free} free today and ${c.paid} bought.${renew}`;
+  if (c.paid > 0) return `${c.paid} bought.${renew}`;
+  return renew.trim();
 }
 
 /** The out-of-credits mark the page already understands, when the gateway says so. */

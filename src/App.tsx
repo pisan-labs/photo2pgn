@@ -14,6 +14,7 @@ import { Library, LocalRepository, type SavedGame } from "./lib/library";
 import { newId, SupabaseRepository } from "./lib/repository";
 import { getSupabase } from "./lib/supabase";
 import { LibraryPanel } from "./components/LibraryPanel";
+import { AdminCredits } from "./components/AdminCredits";
 import { takeSharedPhotos } from "./lib/shared";
 import { useInstall } from "./lib/install";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
@@ -315,6 +316,7 @@ export default function App() {
                 setView({ kind: "review" });
               }}
             />
+            {credits?.admin && <AdminCredits onChanged={() => setChecks((c) => c + 1)} />}
           </>
         )}
 

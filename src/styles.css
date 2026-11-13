@@ -1264,3 +1264,36 @@ a.button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Admins only: add credits to a person. */
+.admin-credits {
+  max-width: 720px;
+}
+
+.admin-form {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.admin-form label {
+  display: grid;
+  gap: 2px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.admin-form input {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.admin-form .wide,
+.admin-form .row {
+  grid-column: 1 / -1;
+}
+
+.ok-note {
+  color: var(--text);
+  margin: 10px 0 0;
+}

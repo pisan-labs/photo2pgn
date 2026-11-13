@@ -19,10 +19,10 @@ The demo button runs the whole review on a sample game with no account and no ke
 
 The page offers two ways in, and the photo step opens once one is set up:
 
-- **Sign in** (Google, or a sign-in link by email). Claude reads with HintWise's key through the HintWise gateway, within the person's credits. When they run out, the page says until when and offers only the next option.
+- **Sign in** (Google, or a sign-in link by email). Claude reads with HintWise's key through the HintWise gateway, within the person's credits: 3 free readings a UTC day and 9 an ISO week, then any credits they have been given or have bought (one credit, one game). The page shows "Use my N credits" and when new free ones come, from the gateway's check. When they run out, the page says until when and offers only the next option.
 - **Your own Anthropic API key.** No account. The key goes only from your browser to Anthropic; HintWise never sees it. Tick "Remember on this device" to keep it in this browser.
 
-Buying credits would be a third way in, offered to a person who is out (`src/lib/access.ts`).
+**Admins** (people the owner adds with the platform's admin workflow) see an "Admin: add credits" panel on the start page: an email address and a whole number of credits (negative takes them back, never below zero), through the platform's `credits-grant` function (`src/lib/grant.ts`). Buying credits, through Paddle, comes next; the packs and the free amounts live in `src/lib/credits.ts`.
 
 ## What is stored, and where
 

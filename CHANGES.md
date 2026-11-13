@@ -67,3 +67,5 @@
 2026-11-13 [code] Header: no Install app or Sign in (step 1 offers sign-in); signed in: name or email (opens account panel) and Sign out; install tip moved under the intro
 
 2026-11-13 [decision] Owner: public readings through the gateway only (VITE_FREE_READER=gateway), so every reading counts as a credit; reader exception dropped from the privacy draft
+
+2026-11-13 [code] Credits slice 1 (Plabs live): "Use my N credits" counts free + bought; admin-only "Admin: add credits" panel (credits-grant, by email, +/-)

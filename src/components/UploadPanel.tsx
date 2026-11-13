@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { prepareImage, type PreparedImage } from "../lib/image";
 import { PhotoEditor } from "./PhotoEditor";
 import { accessOptions, outMessage, readyToRead, renewalLine, type AccessOption, type OutOfCredits } from "../lib/access";
-import { whenLocal, type Credits } from "../lib/allowance";
+import { creditsLine, type Credits } from "../lib/allowance";
 
 interface Props {
   pages: PreparedImage[];
@@ -89,9 +89,7 @@ export function UploadPanel(p: Props) {
               <small>
                 {!p.signedIn
                   ? "With Google or an email link."
-                  : p.credits?.renewsAt
-                    ? `New credits ${whenLocal(p.credits.renewsAt)}.`
-                    : renewalLine()}
+                  : (p.credits && creditsLine(p.credits)) || renewalLine()}
               </small>
               {!p.signedIn && choice === "sign-in" && (
                 <button type="button" className="small" onClick={p.onOpenSignIn}>
