@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="What Photo to PGN keeps about you, and why." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 1000'%3E%3Crect width='1000' height='1000' rx='250' fill='%23312E81'/%3E%3Cg transform='translate%280 1000%29 scale%281 -1%29'%3E%3Cpath fill='%23FFFFFF' d='M557 253V442Q557 467 541 483Q525 499 501 499Q484 499 471 492Q458 485 450 472Q443 459 443 442L403 461Q403 500 419 529Q435 558 465 574Q494 590 532 590Q571 590 600 574Q629 558 645 530Q661 502 661 465V253ZM339 253V747H443V253Z'/%3E%3Cpath fill='%23FF7A45' d='M750 893 L781 781 L893 750 L781 719 L750 607 L719 719 L607 750 L719 781Z'/%3E%3C/g%3E%3C/svg%3E%0A" />
+    <title>Privacy policy · Photo to PGN</title>
+    <style>
+      :root { --bg: #f6f5f1; --panel: #fff; --text: #1d232b; --muted: #5b6470; --line: #dcd9d0; --accent: #2f6db5; }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #14171c; --panel: #1c2128; --text: #e7e9ec; --muted: #a0a8b3; --line: #333a44; --accent: #7fb0ec; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      main { max-width: 720px; margin: 0 auto; padding: 24px 16px 8px; }
+      .back { font-size: 0.9rem; }
+      h1 { font-size: 1.6rem; margin: 12px 0 4px; }
+      h2 { font-size: 1.1rem; margin: 28px 0 6px; }
+      .updated { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+      a { color: var(--accent); }
+      ul { padding-left: 1.2em; }
+      li { margin: 4px 0; }
+      table { border-collapse: collapse; margin: 8px 0; }
+      th, td { text-align: left; padding: 6px 16px 6px 0; border-bottom: 1px solid var(--line); }
+      .others { color: var(--muted); font-size: 0.9rem; margin-top: 32px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="/">← Photo to PGN</a>
+      <h1>Privacy policy</h1>
+      <p class="updated">Last updated: Draft for review, 13 November 2026</p>
+
+      <p>This policy covers Photo to PGN at photo2pgn.hintwise.org, provided by HintWise. Questions, or requests to see or delete your data: <a href="mailto:builder@hintwise.org">builder@hintwise.org</a>.</p>
+
+      <h2>What we keep, and why</h2>
+      <ul>
+        <li><strong>Your account:</strong> your email address and the basic profile your sign-in provider shares (such as your name), kept by HintWise sign-in in Supabase (United States). It is one account for every HintWise app.</li>
+        <li><strong>Your games:</strong> what was read, your corrections and notes, and the PGN. They are kept in your browser. When you are signed in they are also kept in your HintWise account in Supabase (United States), where only you can see them.</li>
+        <li><strong>A record of each reading with credits:</strong> when it happened, the model, its size in tokens, its cost and whether it worked. It is used to count credits and limits. It does not contain your photos or moves.</li>
+        <li><strong>Purchases:</strong> Paddle handles your payment details; we never see your card number. Paddle tells us what you bought (your email address, the pack, the amount and your country for tax).</li>
+      </ul>
+
+      <h2>Your photos</h2>
+      <p>Your photos are used only to read the game. They go from your browser to Anthropic, which runs Claude:</p>
+      <ul>
+        <li>With your own API key, straight from your browser to Anthropic.</li>
+        <li>With credits, through the HintWise gateway, which passes them on without keeping them.</li>
+        <li>One exception: when the HintWise reader is running, photos read while you are signed in can wait on HintWise's server (Netlify) for up to a day, and are read by Claude on the HintWise owner's computer. They are deleted once read, and at the latest after a day.</li>
+      </ul>
+      <p>Anthropic handles them under its commercial terms and <a href="https://www.anthropic.com/legal/privacy">privacy policy</a>.</p>
+
+      <h2>In your browser</h2>
+      <p>Your browser keeps your sign-in session, your games, your settings and, only if you tick "Remember on this device", your Anthropic API key. Your key is sent only to Anthropic. We use no advertising or analytics trackers.</p>
+
+      <h2>Who else handles your data</h2>
+      <ul>
+        <li>Anthropic: reads the photos.</li>
+        <li>Supabase: accounts, saved games, and the records of readings and credits.</li>
+        <li>Netlify: hosts the site, and keeps standard server logs (such as IP addresses) for security and running the service.</li>
+        <li>Paddle: sells credits, and handles payment and tax.</li>
+        <li>Lichess: only if you press "Open in Lichess". Games imported there are public on Lichess.</li>
+        <li>Chess TD: only when Chess TD opened Photo to PGN to read a game and you press "Send to Chess TD". The game goes to the Chess TD page that opened it.</li>
+      </ul>
+      <p>We do not sell your personal data.</p>
+
+      <h2>Deleting your data</h2>
+      <p>Delete a game from My games. Delete your account from the account panel: this deletes your account and your data in every HintWise app, saved games included. Records of purchases are kept, without your account, for as long as tax and accounting rules require.</p>
+
+      <h2>Your rights</h2>
+      <p>You can ask to see, correct, export or delete your personal data, or object to how we use it. Email <a href="mailto:builder@hintwise.org">builder@hintwise.org</a>. Depending on where you live, you may also complain to your data protection authority.</p>
+
+      <h2>Children</h2>
+      <p>Children under 13 should use Photo to PGN with a parent, guardian or coach. If you believe a child under 13 has given us personal data without consent, tell us and we will delete it.</p>
+
+      <h2>Where your data is</h2>
+      <p>Supabase keeps your account and saved games in the United States. Anthropic, Netlify and Paddle may process data in the United States and other countries, under their own terms.</p>
+
+      <h2>Changes</h2>
+      <p>We may change this policy. The date at the top says when it last changed.</p>
+
+      <p class="others"><a href="/terms.html">Terms of service</a> · <a href="/refunds.html">Refund policy</a></p>
+    </main>
+    <site-footer data-site-footer><template shadowrootmode="open"><style>:host { display: block; box-sizing: border-box; width: 100%; grid-column: 1 / -1; align-self: stretch; clear: both; } aside { box-sizing: border-box; max-width: 46rem; margin: 2.5rem auto 0; padding: 1rem 16px 1.5rem; border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent); font: 13px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; text-align: center; overflow-wrap: anywhere; } p { margin: 0; } .mark { display: block; margin: 0 auto 0.6rem; } .nb { white-space: nowrap; } p + p { margin-top: 0.4em; } a { color: inherit; text-decoration: underline; text-underline-offset: 2px; } a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; } @media print { :host { display: none; } }</style><aside aria-label="About the builder"><svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="28" height="28" aria-hidden="true" focusable="false"><rect width="1000" height="1000" rx="250" fill="#312E81"/><g transform="translate(0 1000) scale(1 -1)"><path fill="#FFFFFF" d="M557.1 253.2V441.5Q557.1 467.4 541.1 483.3Q525.2 499.3 500.7 499.3Q483.7 499.3 470.8 492.2Q457.8 485 450.4 471.8Q442.9 458.5 442.9 441.5L402.8 461.2Q402.8 500 419.1 529.2Q435.4 558.5 464.6 574.5Q493.9 590.4 532 590.4Q570.7 590.4 600 574.5Q629.2 558.5 645.2 530.3Q661.2 502 661.2 464.6V253.2ZM338.8 253.2V746.8H442.9V253.2Z"/><path fill="#FF7A45" d="M750 892.9 L781.4 781.4 L892.9 750 L781.4 718.6 L750 607.1 L718.6 718.6 L607.1 750 L718.6 781.4Z"/></g></svg><p>HintWise builds tools like this for small businesses, startups and educators.<br>Built with Claude, guided by experts.<br>Want something like this for your own work? <span class="nb">Email <a href="mailto:builder@hintwise.org?subject=Project%20idea%20(via%20photo2pgn)">builder@hintwise.org</a>.</span><br>Paid projects welcome, <span class="nb">interesting ones may be done for free&nbsp;:-)</span><br>Academic page: <a href="https://pisanorg.github.io/yusuf/">https://pisanorg.github.io/yusuf/</a><br>More apps: <a href="https://studio.hintwise.org/">studio.hintwise.org</a></p><p>Yusuf Pisan, Chief Education Officer, HintWise</p></aside></template></site-footer>
+  </body>
+</html>
