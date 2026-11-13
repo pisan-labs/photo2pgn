@@ -355,7 +355,7 @@ function Reading({
   const text =
     phase === "queued"
       ? "Your photos are in line to be read. You can leave this page open, or come back to it later on this device."
-      : "A full sheet usually takes under a minute; Claude follows the game as it reads to sort out unclear moves. Keep this page open.";
+      : "A full sheet usually takes under a minute; HintWise follows the game as it reads to sort out unclear moves. Keep this page open.";
   return (
     <section className="panel reading" aria-live="polite">
       <div className="spinner" aria-hidden="true" />
