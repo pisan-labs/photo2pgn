@@ -60,7 +60,7 @@ test("photo to PGN with the visitor's own key", async ({ page }) => {
   await expect(page.locator(".legend")).toContainText("1 to check");
   await expect(page.locator(".pgn textarea")).toHaveValue(/16\. Qb8\+ Nxb8 17\. Rd8# 1-0/);
   await page.locator(".cell.st-guess").click();
-  await page.getByLabel("Best guesses").locator(".chip", { hasText: "Rd8#" }).click();
+  await page.getByRole("button", { name: "Keep Rd8#" }).click();
   await expect(page.locator(".cell.st-guess")).toHaveCount(0);
   await expect(page.locator(".pgn textarea")).toHaveValue(/16\. Qb8\+ Nxb8 17\. Rd8# 1-0/);
 

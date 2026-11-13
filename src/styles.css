@@ -1016,16 +1016,17 @@ a.button {
   white-space: nowrap;
 }
 
-/* The game as an analysis board: board left; players, moves and the buttons
-   right, as tall as the board. On a phone: board, buttons, moves. */
+/* The game as an analysis board: board left; players, moves, the buttons and
+   the selected move right. On a phone: board, buttons, the move, the moves. */
 .game-view {
   display: grid;
-  grid-template-columns: minmax(0, 560px) minmax(220px, 340px);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 560px) minmax(240px, 360px);
+  grid-template-rows: auto minmax(140px, 1fr) auto auto;
   grid-template-areas:
     "board players"
     "board moves"
-    "board controls";
+    "board controls"
+    "board panel";
   gap: 0 16px;
   justify-content: center;
   align-items: start;
@@ -1190,9 +1191,13 @@ a.button {
     grid-template-areas:
       "board"
       "controls"
+      "panel"
       "players"
       "moves";
     gap: 0;
+  }
+  .gv-panel {
+    margin: 0 0 12px;
   }
   .gv-controls {
     border-radius: 8px;
@@ -1331,4 +1336,91 @@ a.button {
 
 .admin-users .email {
   font-weight: 600;
+}
+
+/* The selected move, next to the moves: as little as needed. */
+.gv-panel {
+  grid-area: panel;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.move-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+
+.move-panel p {
+  margin: 0 0 6px;
+}
+
+.mp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 1.05rem;
+}
+
+.mp-head .badge {
+  flex-basis: auto;
+  font-size: 0.8rem;
+}
+
+.mp-sheet .muted {
+  color: var(--muted);
+}
+
+.move-panel .chips {
+  margin: 8px 0 4px;
+}
+
+.chip.keep {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.mp-links {
+  gap: 12px;
+  margin: 4px 0;
+}
+
+.mp-more {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.mp-more .edit {
+  margin-bottom: 0;
+}
+
+.mp-tip {
+  margin-top: 8px !important;
+  font-size: 0.8rem;
+}
+
+/* Other moves for the selected one, under its row in the list. */
+.alt-row td {
+  padding: 0 2px 6px !important;
+  background: transparent !important;
+  border-right: 0 !important;
+}
+
+.alt-pop {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.alt-pop .chips {
+  margin: 0 0 6px;
+}
+
+.alt-actions {
+  gap: 12px;
 }

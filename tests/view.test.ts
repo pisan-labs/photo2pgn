@@ -8,32 +8,30 @@ const opera = analyzeGame(rowsToPlies(rowsFrom(OPERA_GAME)));
 
 describe("boardView", () => {
   it("starts from the starting position and shows each move played, with its squares", () => {
-    expect(boardView(opera, START)).toEqual({ fen: START_FEN, lastMove: null, caption: "Starting position", editable: false });
+    expect(boardView(opera, START)).toEqual({ fen: START_FEN, lastMove: null, caption: "Starting position", moveFen: null });
     const first = boardView(opera, 0);
     expect(first.caption).toBe("After 1. e4");
     expect(first.lastMove).toEqual({ from: "e2", to: "e4" });
     expect(first.fen).toBe(opera.plies[0].fenAfter);
+    // Tapping a piece changes the move, from the position it was made in.
+    expect(first.moveFen).toBe(opera.plies[0].fenBefore);
     expect(boardView(opera, opera.plies.length - 1).caption).toBe("After 17. Rd8#");
   });
 
-  it("shows the position before a move when it is being changed on the board", () => {
-    const v = boardView(opera, 1, true);
-    expect(v).toMatchObject({ fen: opera.plies[1].fenBefore, editable: true, caption: "Black to move: tap a piece, then its square" });
-  });
 
   it("stops at a move that needs fixing, and says so for the moves after it", () => {
     // The person's own edit is final, so an illegal one (6. Bd4) stops the game there.
     const bad = analyzeGame(rowsToPlies(rowsFrom(OPERA_GAME)), { edits: { 10: "Bd4" } });
     expect(bad.stoppedAt).toBe(10);
-    expect(boardView(bad, 10)).toMatchObject({ fen: bad.plies[10].fenBefore, editable: false, caption: "Before 6., White to move" });
-    expect(boardView(bad, bad.plies.length - 1)).toMatchObject({ fen: bad.finalFen, caption: "Not checked yet: fix the move in red (6.) first" });
+    expect(boardView(bad, 10)).toMatchObject({ fen: bad.plies[10].fenBefore, moveFen: bad.plies[10].fenBefore, caption: "Before 6., White to move" });
+    expect(boardView(bad, bad.plies.length - 1)).toMatchObject({ fen: bad.finalFen, moveFen: null, caption: "Not checked yet: fix the move in red (6.) first" });
   });
 
   it("shows where an entry was left out", () => {
     const skipped = { ...opera, plies: opera.plies.map((p, i) => (i === 3 ? { ...p, status: "skipped" as const, san: null, fenAfter: null } : p)) };
     expect(boardView(skipped, 3)).toMatchObject({ caption: "Position when the entry was left out", fen: opera.plies[3].fenBefore });
-    // Not editable on the board: nothing was played there.
-    expect(boardView(skipped, 3, true).editable).toBe(false);
+    // A move can still be played there, which puts the entry back.
+    expect(boardView(skipped, 3).moveFen).toBe(opera.plies[3].fenBefore);
   });
 });
 

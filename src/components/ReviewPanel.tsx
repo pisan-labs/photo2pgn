@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Extraction, GameHeaders } from "../lib/schema";
 import { rowsToPlies, type Analysis, type PlyResult, type PlyStatus } from "../lib/repair";
 import { useAnalysis } from "../lib/useAnalysis";
@@ -12,6 +12,7 @@ import { GameViewer, STATUS_LABEL } from "./GameViewer";
 import { SendToChessTd } from "./Handoff";
 import { resultMessage, type Handoff } from "../lib/handoff";
 import { START, boardView, manyFixes, plyLabel, stepTo } from "../lib/view";
+import { rankMoves } from "../lib/repair";
 
 export interface ReviewSession {
   id: string;
@@ -106,8 +107,6 @@ function Review({
       ?.index ?? null;
   const [selected, setSelected] = useState<number>(firstToCheck ?? START);
   const [flipped, setFlipped] = useState(() => load<boolean>(FLIP_STORAGE) === true);
-  // Changing a move on the board: on by default for a move that is not legal.
-  const [boardEdit, setBoardEdit] = useState<{ index: number; on: boolean } | null>(null);
 
   const counts = useMemo(() => {
     const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, guess: 0, skipped: 0, illegal: 0, unchecked: 0 };
@@ -123,9 +122,12 @@ function Review({
   };
 
   const sel: PlyResult | undefined = selected >= 0 ? analysis.plies[selected] : undefined;
-  const editing = sel ? (boardEdit?.index === sel.index ? boardEdit.on : sel.status === "illegal") : false;
-  const view = boardView(analysis, selected, editing);
+  const view = boardView(analysis, selected);
   const withInsert = (p: PlyResult, san: string) => (p.inserted ? `${p.inserted.san} ${san}` : san);
+  // The other legal moves for the selected one, most likely first.
+  const lang = extraction.notationLanguage || "en";
+  const alternatives = useMemo(() => (sel ? rankMoves(plies, analysis, sel.index, { lang, edits }) : []), [sel, plies, analysis, lang, edits]);
+  const pick = (san: string) => sel && setEdit(sel.index, withInsert(sel, san));
 
   // Arrow keys step through the game when focus is not in a text field.
   useEffect(() => {
@@ -222,37 +224,27 @@ function Review({
           setFlipped(!flipped);
           save(FLIP_STORAGE, !flipped);
         }}
-        onBoardMove={(san) => {
-          if (!sel) return;
-          setBoardEdit({ index: sel.index, on: false });
-          setEdit(sel.index, withInsert(sel, san));
-        }}
+        onBoardMove={pick}
+        alternatives={alternatives}
+        onPick={pick}
+        panel={
+          sel ? (
+            <MovePanel key={sel.index} ply={sel} edit={edits[sel.index]} best={alternatives.slice(0, 3)} onEdit={(v) => setEdit(sel.index, v)} />
+          ) : (
+            <div className="move-panel">
+              <p className="mp-head">
+                <strong>Starting position</strong>
+              </p>
+              <p className="hint">Step through with the buttons or the arrow keys, or tap a move.</p>
+            </div>
+          )
+        }
       />
 
       <div className="review-grid two">
-        <section className="panel detail-panel" aria-label="This move">
-          {sel ? (
-            <Commentary
-              key={sel.index}
-              ply={sel}
-              edit={edits[sel.index]}
-              onEdit={(v) => setEdit(sel.index, v)}
-              editing={editing}
-              onToggleBoard={() => setBoardEdit({ index: sel.index, on: !editing })}
-            />
-          ) : (
-            <div className="detail">
-              <h2>Starting position</h2>
-              <p className="hint">Step through the game with the buttons under the moves, or the arrow keys. Tap a move to check it.</p>
-            </div>
-          )}
-        </section>
         <section className="panel photo-panel" aria-label="Scoresheet photo">
           <PhotoViewer images={session.images} />
         </section>
-      </div>
-
-      <div className="review-grid two">
         <section className="panel" aria-labelledby="game-info">
           <h2 id="game-info">Game details</h2>
           <HeadersForm headers={headers} onChange={(h) => onChange({ ...session, headers: h })} />
@@ -266,11 +258,12 @@ function Review({
             />
           </label>
         </section>
-        <section className="panel" aria-labelledby="pgn-title">
-          <h2 id="pgn-title">PGN</h2>
-          <PgnExport headers={headers} analysis={analysis} pgn={pgn} commentFixes={commentFixes} setCommentFixes={setCommentFixes} />
-        </section>
       </div>
+
+      <section className="panel" aria-labelledby="pgn-title">
+        <h2 id="pgn-title">PGN</h2>
+        <PgnExport headers={headers} analysis={analysis} pgn={pgn} commentFixes={commentFixes} setCommentFixes={setCommentFixes} />
+      </section>
     </div>
   );
 }
@@ -309,192 +302,143 @@ function PhotoViewer({ images }: { images: string[] }) {
   );
 }
 
-/** What is known about the selected move, and the ways to fix it. */
-function Commentary({
+/**
+ * The selected move, as short as it can be: what it is, what the sheet says,
+ * and the likeliest other moves. The rest (typing a move, a missing move,
+ * leaving the entry out, why) is one tap away.
+ */
+function MovePanel({
   ply,
   edit,
+  best,
   onEdit,
-  editing,
-  onToggleBoard,
 }: {
   ply: PlyResult;
   edit: string | undefined;
+  best: string[];
   onEdit: (v: string | null) => void;
-  editing: boolean;
-  onToggleBoard: () => void;
 }) {
+  const [more, setMore] = useState(false);
+  const [why, setWhy] = useState(false);
   const [text, setText] = useState(edit ?? ply.san ?? ply.reading?.san ?? "");
   const [missing, setMissing] = useState<string | null>(null);
   const r = ply.reading;
-  const side = ply.color === "w" ? "White" : "Black";
-  const canPlay = Boolean(ply.fenBefore) && ply.status !== "skipped";
+  const flagged = ply.status !== "ok" && ply.status !== "unchecked";
   const current = ply.san ?? edit ?? r?.san ?? r?.written ?? "";
   const withInsert = (san: string) => (ply.inserted ? `${ply.inserted.san} ${san}` : san);
-  const apply = (v: string) => {
-    const t = v.trim();
-    if (t) onEdit(t);
-  };
+
+  if (ply.status === "unchecked") {
+    return (
+      <div className="move-panel">
+        <p className="mp-head">
+          <strong>{r?.written || "(blank)"}</strong> <span className="badge st-unchecked">{STATUS_LABEL.unchecked}</span>
+        </p>
+        <p className="hint">Fix the move in red first.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="detail">
-      <div className="row detail-head">
-        <h2>
-          {plyLabel(ply)} {ply.san ?? side}
-        </h2>
+    <div className="move-panel" aria-label="This move">
+      <p className="mp-head">
+        <strong>
+          {plyLabel(ply)} {ply.san ?? current}
+        </strong>{" "}
         <span className={`badge st-${ply.status}`}>{STATUS_LABEL[ply.status]}</span>
-      </div>
-
-      <dl className="facts">
-        <dt>On the sheet</dt>
-        <dd>
-          {r ? (
-            <>
-              <code>{r.written || "(blank)"}</code>
-              {r.san && r.san !== r.written && (
-                <>
-                  {" "}
-                  read as <code>{r.san}</code>
-                </>
-              )}
-              {r.legibility !== "clear" && ` (${r.legibility})`}
-              {r.alternatives.length > 0 && (
-                <>
-                  ; could also be {r.alternatives.map((a, i) => <code key={i}>{a}</code>).reduce<ReactNode[]>((acc, el, i) => (i ? [...acc, ", ", el] : [el]), [])}
-                </>
-              )}
-            </>
-          ) : (
-            "(blank)"
-          )}
-        </dd>
-        {ply.sheetNumber !== ply.moveNumber && (
-          <>
-            <dt>Sheet row</dt>
-            <dd>{ply.sheetNumber}</dd>
-          </>
-        )}
+      </p>
+      <p className="mp-sheet">
+        Sheet: <code>{r?.written || "(blank)"}</code>
+        {r && r.legibility !== "clear" && <span className="muted"> ({r.legibility})</span>}
         {ply.inserted && (
           <>
-            <dt>Missing before it</dt>
-            <dd>
-              <code>
-                {ply.inserted.label} {ply.inserted.san}
-              </code>{" "}
-              (not on the sheet)
-            </dd>
+            {" "}
+            · missing before it: <code>{ply.inserted.san}</code>
           </>
         )}
-        {ply.san && (
-          <>
-            <dt>In the PGN</dt>
-            <dd>
-              <code>
-                {ply.label} {ply.san}
-              </code>
-            </dd>
-          </>
-        )}
-      </dl>
-      {ply.note && <p className="note">{ply.note}</p>}
-
-      <form
-        className="edit"
-        onSubmit={(e) => {
-          e.preventDefault();
-          apply(text);
-        }}
-      >
-        <label htmlFor="move-edit">Correct move</label>
-        <div className="row">
-          <input
-            id="move-edit"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
-            placeholder="e.g. Nf3"
-            aria-describedby="move-edit-hint"
-          />
-          <button type="submit">Use</button>
-          {canPlay && (
-            <button type="button" className="secondary" onClick={onToggleBoard} aria-pressed={editing}>
-              {editing ? "Show the move played" : "Change it on the board"}
+      </p>
+      {flagged && (
+        <div className="chips" aria-label="Likeliest moves">
+          {ply.san && (
+            <button type="button" className="chip keep" onClick={() => onEdit(withInsert(ply.san!))}>
+              Keep {ply.san}
             </button>
           )}
+          {best.map((s) => (
+            <button key={s} type="button" className="chip" onClick={() => onEdit(withInsert(s))}>
+              {s}
+            </button>
+          ))}
         </div>
-        <p className="hint" id="move-edit-hint">
-          {ply.status === "unchecked"
-            ? "This move is checked once the move in red is fixed."
-            : editing
-              ? "Tap a piece on the board, then its square."
-              : "Type a move, pick one below, or change it on the board."}
-        </p>
-        {ply.status === "guess" && <p className="hint">Best guesses, most likely first:</p>}
-        {ply.suggestions.length > 0 && (
-          <div className="chips" aria-label={ply.status === "guess" ? "Best guesses" : "Legal moves"}>
-            {ply.suggestions.slice(0, 12).map((s) => (
-              <button key={s} type="button" className="chip" onClick={() => onEdit(withInsert(s))}>
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="row">
-          {(ply.status === "fixed" || ply.status === "unsure" || ply.status === "guess") && ply.san && (
-            <button type="button" className="secondary" onClick={() => onEdit(withInsert(ply.san!))}>
-              {ply.inserted ? `${ply.inserted.san} then ${ply.san} is right` : `${ply.san} is right`}
-            </button>
-          )}
-          {ply.inserted && ply.san && (
-            <button type="button" className="secondary" onClick={() => onEdit(ply.san!)}>
-              Remove the inserted {ply.inserted.san}
-            </button>
-          )}
-          {!ply.inserted && ply.status !== "skipped" && missing === null && (
-            <button type="button" className="secondary" onClick={() => setMissing("")}>
-              A move is missing before this one
-            </button>
-          )}
-          {ply.status !== "skipped" && (
-            <button type="button" className="secondary" onClick={() => onEdit("-")}>
-              Leave this entry out
-            </button>
-          )}
-          {edit !== undefined && (
-            <button type="button" className="link" onClick={() => onEdit(null)}>
-              Undo my change
-            </button>
-          )}
-        </div>
-      </form>
-      {missing !== null && (
-        <form
-          className="edit missing"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (missing.trim()) onEdit(`${missing.trim()} ${current}`);
-          }}
-        >
-          <label htmlFor="missing-move">The missing move, played before {current || "this one"}</label>
-          <div className="row">
-            <input
-              id="missing-move"
-              value={missing}
-              onChange={(e) => setMissing(e.target.value)}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoComplete="off"
-              placeholder="e.g. e5"
-              autoFocus
-            />
-            <button type="submit">Add</button>
-            <button type="button" className="link" onClick={() => setMissing(null)}>
-              Cancel
-            </button>
-          </div>
-        </form>
       )}
+      <div className="row mp-links">
+        {ply.note && (
+          <button type="button" className="link" aria-expanded={why} onClick={() => setWhy(!why)}>
+            Why?
+          </button>
+        )}
+        <button type="button" className="link" aria-expanded={more} onClick={() => setMore(!more)}>
+          More
+        </button>
+        {edit !== undefined && (
+          <button type="button" className="link" onClick={() => onEdit(null)}>
+            Undo my change
+          </button>
+        )}
+      </div>
+      {why && ply.note && <p className="note">{ply.note}</p>}
+      {more && (
+        <div className="mp-more">
+          <form
+            className="edit"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (text.trim()) onEdit(text.trim());
+            }}
+          >
+            <label htmlFor="move-edit">Type the move</label>
+            <div className="row">
+              <input id="move-edit" value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} autoCapitalize="off" autoComplete="off" placeholder="e.g. Nf3" />
+              <button type="submit">Use</button>
+            </div>
+          </form>
+          <div className="row">
+            {ply.inserted && ply.san && (
+              <button type="button" className="secondary small" onClick={() => onEdit(ply.san!)}>
+                Remove the inserted {ply.inserted.san}
+              </button>
+            )}
+            {!ply.inserted && ply.status !== "skipped" && missing === null && (
+              <button type="button" className="secondary small" onClick={() => setMissing("")}>
+                A move is missing before this one
+              </button>
+            )}
+            {ply.status !== "skipped" && (
+              <button type="button" className="secondary small" onClick={() => onEdit("-")}>
+                Leave this entry out
+              </button>
+            )}
+          </div>
+          {missing !== null && (
+            <form
+              className="edit missing"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (missing.trim()) onEdit(`${missing.trim()} ${current}`);
+              }}
+            >
+              <label htmlFor="missing-move">The missing move, played before {current || "this one"}</label>
+              <div className="row">
+                <input id="missing-move" value={missing} onChange={(e) => setMissing(e.target.value)} spellCheck={false} autoCapitalize="off" autoComplete="off" placeholder="e.g. e5" autoFocus />
+                <button type="submit">Add</button>
+                <button type="button" className="link" onClick={() => setMissing(null)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+      <p className="hint mp-tip">Tap a piece on the board to play a different move, or this move in the list for other moves.</p>
     </div>
   );
 }

@@ -55,7 +55,7 @@ async function readAndCheck(page: Page) {
   // Chess TD's pairing wins over the handwriting.
   await expect(page.getByLabel("Black", { exact: true })).toHaveValue("Allies");
   await page.locator(".cell.st-guess").click();
-  await page.getByRole("button", { name: "Rd8# is right" }).click();
+  await page.getByRole("button", { name: "Keep Rd8#" }).click();
   await expect(page.locator(".cell.st-guess")).toHaveCount(0);
 }
 

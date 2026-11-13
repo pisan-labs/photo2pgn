@@ -10,8 +10,8 @@ export interface BoardView {
   fen: string;
   lastMove: { from: string; to: string } | null;
   caption: string;
-  /** The person is changing this move on the board: tap a piece, then its square. */
-  editable: boolean;
+  /** The position this move is made in, so it can be changed on the board; null when it cannot. */
+  moveFen: string | null;
 }
 
 /** From and to squares of a SAN move in a position, for highlighting. */
@@ -34,21 +34,18 @@ export function stepTo(analysis: Analysis, target: number): number {
   return Math.max(START, Math.min(analysis.plies.length - 1, target));
 }
 
-/** The board at step `selected`; `editing` asks for the position before that move, to play it. */
-export function boardView(analysis: Analysis, selected: number, editing = false): BoardView {
+/** The board at step `selected`; tapping a piece there changes that move, from `moveFen`. */
+export function boardView(analysis: Analysis, selected: number): BoardView {
   const start = analysis.plies[0]?.fenBefore ?? START_FEN;
   const p = selected >= 0 ? analysis.plies[selected] : undefined;
-  if (!p) return { fen: start, lastMove: null, caption: "Starting position", editable: false };
+  if (!p) return { fen: start, lastMove: null, caption: "Starting position", moveFen: null };
   const side = p.color === "w" ? "White" : "Black";
-  if (editing && p.fenBefore && p.status !== "skipped") {
-    return { fen: p.fenBefore, lastMove: null, caption: `${side} to move: tap a piece, then its square`, editable: true };
-  }
   if (p.fenAfter && p.san) {
-    return { fen: p.fenAfter, lastMove: moveSquares(p.fenBefore, p.san), caption: `After ${plyLabel(p)} ${p.san}`, editable: false };
+    return { fen: p.fenAfter, lastMove: moveSquares(p.fenBefore, p.san), caption: `After ${plyLabel(p)} ${p.san}`, moveFen: p.fenBefore };
   }
   if (p.fenBefore) {
     const caption = p.status === "skipped" ? "Position when the entry was left out" : `Before ${plyLabel(p)}, ${side} to move`;
-    return { fen: p.fenBefore, lastMove: null, caption, editable: false };
+    return { fen: p.fenBefore, lastMove: null, caption, moveFen: p.fenBefore };
   }
   // Past the move that needs fixing: the game has not been replayed this far.
   const stop = analysis.stoppedAt !== null ? analysis.plies[analysis.stoppedAt] : undefined;
@@ -56,7 +53,7 @@ export function boardView(analysis: Analysis, selected: number, editing = false)
     fen: analysis.finalFen,
     lastMove: null,
     caption: stop ? `Not checked yet: fix the move in red (${plyLabel(stop)}) first` : "Not checked yet",
-    editable: false,
+    moveFen: null,
   };
 }
 

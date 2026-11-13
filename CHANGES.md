@@ -73,3 +73,5 @@
 2026-11-13 [note] Owner checked live (979d793): "Use my 3 credits" and the admin panel shown, no errors. Next: Paddle (owner account), raise app caps before selling
 
 2026-11-13 [code] Admin panel: "List users" (credits-grant list mode, Plabs live): email, first/last used, free left, credits, readings; Grant per row; Copy emails; privacy draft says so
+
+2026-11-13 [code] Review: tap a piece of the side that moved to replay the move; click the selected move again for ranked alternatives; compact move panel under the buttons

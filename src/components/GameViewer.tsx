@@ -1,7 +1,7 @@
 // The game as an analysis board: the board on the left, the moves on the
 // right with the buttons to step through them underneath. On a phone: the
 // board, the buttons, then the moves.
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { GameHeaders } from "../lib/schema";
 import type { Analysis, PlyResult, PlyStatus } from "../lib/repair";
 import { START, plyLabel, stepTo, type BoardView } from "../lib/view";
@@ -33,16 +33,29 @@ interface Props {
   flipped: boolean;
   onFlip: () => void;
   onBoardMove: (san: string) => void;
+  /** The other legal moves for the selected one, most likely first, offered when it is clicked again. */
+  alternatives: string[];
+  onPick: (san: string) => void;
+  /** What is known about the selected move, under the buttons. */
+  panel?: ReactNode;
 }
 
-export function GameViewer({ analysis, edits, headers, selected, onSelect, view, flipped, onFlip, onBoardMove }: Props) {
+export function GameViewer({ analysis, edits, headers, selected, onSelect, view, flipped, onFlip, onBoardMove, alternatives, onPick, panel }: Props) {
   const last = analysis.plies.length - 1;
   const white = headers.white.trim() || "White";
   const black = headers.black.trim() || "Black";
   return (
     <section className="panel game-view" aria-label="Game">
       <div className="gv-board">
-        <Board fen={view.fen} lastMove={view.lastMove} flipped={flipped} onMove={view.editable ? onBoardMove : undefined} caption={view.caption} />
+        <Board
+          key={`${selected}:${view.fen}`}
+          fen={view.fen}
+          moveFen={view.moveFen ?? undefined}
+          lastMove={view.lastMove}
+          flipped={flipped}
+          onMove={view.moveFen ? onBoardMove : undefined}
+          caption={view.caption}
+        />
       </div>
       <div className="gv-players">
         <span className="gv-player">
@@ -55,7 +68,7 @@ export function GameViewer({ analysis, edits, headers, selected, onSelect, view,
         </span>
         {headers.result !== "*" && <span className="gv-result">{headers.result.replace("1/2", "½")}</span>}
       </div>
-      <MoveList analysis={analysis} edits={edits} selected={selected} onSelect={onSelect} />
+      <MoveList analysis={analysis} edits={edits} selected={selected} onSelect={onSelect} alternatives={alternatives} onPick={onPick} />
       <div className="gv-controls" role="group" aria-label="Step through the game">
         <button type="button" className="gv-btn" aria-label="Go to the start" title="Start (Home)" onClick={() => onSelect(START)} disabled={selected <= START}>
           <Icon d="M5 5v14M19 5 9 12l10 7z" />
@@ -73,6 +86,7 @@ export function GameViewer({ analysis, edits, headers, selected, onSelect, view,
           <Icon d="M7 4v15m0 0-3-3m3 3 3-3M17 20V5m0 0-3 3m3-3 3 3" />
         </button>
       </div>
+      {panel && <div className="gv-panel">{panel}</div>}
     </section>
   );
 }
@@ -85,18 +99,28 @@ function Icon({ d }: { d: string }) {
   );
 }
 
+const POPUP_FIRST = 6;
+
 function MoveList({
   analysis,
   edits,
   selected,
   onSelect,
+  alternatives,
+  onPick,
 }: {
   analysis: Analysis;
   edits: Record<number, string>;
   selected: number;
   onSelect: (i: number) => void;
+  alternatives: string[];
+  onPick: (san: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Clicking the selected move again opens its alternatives under its row.
+  const [open, setOpen] = useState<number | null>(null);
+  const [all, setAll] = useState(false);
+  const showing = open !== null && open === selected;
   // Keep the current move in view inside the list, without scrolling the page.
   useEffect(() => {
     const box = ref.current;
@@ -124,9 +148,18 @@ function MoveList({
       <button
         type="button"
         className={`cell st-${p.status}${selected === p.index ? " selected" : ""}`}
-        onClick={() => onSelect(p.index)}
-        title={STATUS_LABEL[p.status]}
+        onClick={() => {
+          if (selected === p.index) {
+            setOpen(showing ? null : p.index);
+            setAll(false);
+          } else {
+            onSelect(p.index);
+            setOpen(null);
+          }
+        }}
+        title={selected === p.index ? "Click again for other moves" : STATUS_LABEL[p.status]}
         aria-current={selected === p.index ? "step" : undefined}
+        aria-expanded={selected === p.index ? showing : undefined}
         aria-label={`${plyLabel(p)} ${p.inserted ? `${p.inserted.san} (not on the sheet) then ` : ""}${cellText(p, edits)}, ${STATUS_LABEL[p.status]}`}
       >
         {p.inserted && (
@@ -150,13 +183,56 @@ function MoveList({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.number}>
-              <th scope="row">{r.number}</th>
-              <td>{cell(r.w)}</td>
-              <td>{cell(r.b)}</td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const here = showing && (r.w?.index === selected || r.b?.index === selected);
+            const p = here ? analysis.plies[selected] : undefined;
+            return (
+              <Fragment key={r.number}>
+                <tr>
+                  <th scope="row">{r.number}</th>
+                  <td>{cell(r.w)}</td>
+                  <td>{cell(r.b)}</td>
+                </tr>
+                {p && (
+                  <tr className="alt-row">
+                    <td colSpan={3}>
+                      <div className="alt-pop" role="group" aria-label={`Other moves for ${plyLabel(p)}`}>
+                        {alternatives.length === 0 ? (
+                          <p className="hint">No other legal move here.</p>
+                        ) : (
+                          <div className="chips">
+                            {(all ? alternatives : alternatives.slice(0, POPUP_FIRST)).map((san) => (
+                              <button
+                                key={san}
+                                type="button"
+                                className="chip"
+                                onClick={() => {
+                                  onPick(san);
+                                  setOpen(null);
+                                }}
+                              >
+                                {san}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <div className="row alt-actions">
+                          {!all && alternatives.length > POPUP_FIRST && (
+                            <button type="button" className="link" onClick={() => setAll(true)}>
+                              All legal moves ({alternatives.length})
+                            </button>
+                          )}
+                          <button type="button" className="link" onClick={() => setOpen(null)}>
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>

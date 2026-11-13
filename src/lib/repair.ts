@@ -856,3 +856,62 @@ export function analyzeGame(
     endState: replay.isCheckmate() ? "checkmate" : replay.isStalemate() ? "stalemate" : null,
   };
 }
+
+// ---- alternatives for one move, most likely first ----
+
+const RANK_LOOKAHEAD = 10; // moves after it replayed as read
+const RANK_FIT = 1.5; // worth of each of them that then fits
+
+/**
+ * Every legal move for ply `index`, most likely first: how close it is to
+ * what was read (the same prices the search uses), less a bonus for each of
+ * the next few moves that then fits as read. Without the move already chosen.
+ */
+export function rankMoves(
+  plies: PlyInput[],
+  analysis: Analysis,
+  index: number,
+  opts: { lang?: string; edits?: Record<number, string> } = {},
+): string[] {
+  const p = analysis.plies[index];
+  const fen = p?.fenBefore;
+  if (!p || !fen) return [];
+  const lang = opts.lang ?? "en";
+  const edits = opts.edits ?? {};
+  const positions = new Positions();
+  const pos = positions.get(fen);
+  const infos = new Map<number, ReadingInfo>();
+  const info = (i: number) => {
+    let x = infos.get(i);
+    if (!x) infos.set(i, (x = prepare(plies[i]?.reading ?? null, lang)));
+    return x;
+  };
+  const w = { lastTo: null, moveNumber: plies[index]?.moveNumber ?? 1 };
+  const costs = new Map(candidates(pos, info(index), undefined, true, w, positions, true).cands.map((c) => [c.san, c.cost]));
+  const worst = Math.max(0, ...costs.values()) + 1;
+
+  const fits = (san: string): number => {
+    let at = play(fen, san);
+    let n = 0;
+    for (let k = 1; k <= RANK_LOOKAHEAD; k++) {
+      const j = index + k;
+      if (j >= plies.length) break;
+      const here = positions.get(at);
+      const edit = edits[j];
+      const next =
+        edit !== undefined
+          ? editCandidates(here, edit, positions)[0]
+          : candidates(here, info(j), undefined, false, { lastTo: null, moveNumber: plies[j].moveNumber }, positions).cands[0];
+      if (!next || next.skip || next.cost >= TROUBLE) break;
+      n += next.cost < 0.5 ? 1 : 0.5;
+      at = apply(at, next);
+    }
+    return n;
+  };
+
+  return pos.sans
+    .filter((san) => san !== p.san)
+    .map((san) => ({ san, score: (costs.get(san) ?? worst) - RANK_FIT * fits(san) }))
+    .sort((a, b) => a.score - b.score)
+    .map((x) => x.san);
+}
