@@ -1,15 +1,17 @@
 // Fixing moves without typing: on the board, and with the editor's buttons.
 import { expect, test } from "@playwright/test";
 
-test("fix the red move by tapping the board, then add a missing move", async ({ page }) => {
+test("settle the move to check by playing it on the board, then add a missing move", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Try the demo game instead" }).click();
-  await page.locator(".cell.st-illegal").click();
-  // The red move opens with the board ready: Black to move, tap the knight on d7, then b8.
-  await expect(page.getByText("Black to move: tap a piece, then its square")).toBeVisible();
-  await page.getByRole("button", { name: "d7 black n" }).click();
-  await page.getByRole("button", { name: /^b8/ }).click();
-  await expect(page.locator(".cell.st-illegal")).toHaveCount(0);
+  // The smudged last move is the engine's best guess; the review opens on it.
+  await expect(page.locator(".cell.st-guess")).toHaveText("Rd8#");
+  await expect(page.getByLabel("Best guesses").locator(".chip").first()).toHaveText("Rd8#");
+  await page.getByRole("button", { name: "Change it on the board" }).click();
+  await expect(page.getByText("White to move: tap a piece, then its square")).toBeVisible();
+  await page.getByRole("button", { name: "d1 white r" }).click();
+  await page.getByRole("button", { name: /^d8/ }).click();
+  await expect(page.locator(".cell.st-guess")).toHaveCount(0);
   await expect(page.locator(".pgn textarea")).toHaveValue(/Nxb8 17\. Rd8# 1-0/);
 
   await page.getByRole("button", { name: "Flip board" }).click();

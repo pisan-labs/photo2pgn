@@ -95,14 +95,42 @@ describe("analyzeGame", () => {
     expect(a.plies[10].note).toMatch(/next \d+ moves fit/);
   });
 
-  it("stops instead of forcing a different game onto the sheet", () => {
+  it("keeps going through moves from a different game, and flags every move it changed", { timeout: 20_000 }, () => {
     const OTHER = "c4 e6 Nc3 d5 cxd5 exd5 Bg5 Be7 e3 O-O Bd3 Nbd7 Qc2 Re8 Nge2 Nf8 O-O-O c6 h3 Qa5 Kb1 b5".split(" ");
-    const a = analyze([...OPERA_GAME.slice(0, 10), ...OTHER]);
-    expect(a.stoppedAt).not.toBeNull();
-    expect(a.stoppedAt!).toBeLessThanOrEqual(12);
-    expect(a.plies.filter((p) => p.status === "fixed")).toHaveLength(0);
-    expect(a.plies[a.stoppedAt!].status).toBe("illegal");
-    expect(a.plies[a.stoppedAt! + 1].status).toBe("unchecked");
+    const sheet = [...OPERA_GAME.slice(0, 10), ...OTHER];
+    const a = analyze(sheet);
+    expect(a.stoppedAt).toBeNull();
+    expect(a.plies.every((p) => p.san)).toBe(true);
+    // Nothing is changed silently: a move not played as read is always flagged.
+    for (const p of a.plies) if (p.source !== "reading") expect(p.status).not.toBe("ok");
+    expect(a.plies.some((p) => p.status === "guess")).toBe(true);
+  });
+
+  it("never stops at a misreading near the end: the best guess, marked to check", () => {
+    // 17. Rd8# unreadable, and 16... Nxb8 written as a clear but impossible Nc6.
+    const a = analyze(OPERA_GAME, { 31: { written: "Nc6", san: "Nc6" }, 32: { written: "?", san: "", legibility: "illegible" } });
+    expect(a.stoppedAt).toBeNull();
+    expect(a.plies[31]).toMatchObject({ san: "Nxb8", source: "forced", status: "fixed" });
+    const last = a.plies[32];
+    expect(last).toMatchObject({ status: "guess" });
+    // The best guesses come first: mate, then the other moves the cheapest games play there.
+    expect(last.suggestions[0]).toBe("Rd8#");
+    expect(last).toMatchObject({ san: "Rd8#" });
+    expect(a.endState).toBe("checkmate");
+  });
+
+  it("calls a fix confirmed only when the moves after it fit as read", () => {
+    // 6. Bc4 written as an impossible Ka5: twenty moves after it fit, so the fix is confirmed.
+    // (It may be 6. a3: "a5" and "a3" are an easy misreading, and every later move is legal
+    // either way, which is why a corrected move is still shown for checking.)
+    const early = analyze(OPERA_GAME, { 10: { san: "Ka5", written: "Ka5" } });
+    expect(early.plies[10].status).toBe("fixed");
+    expect(early.plies[10].support).toBeGreaterThanOrEqual(20);
+    expect(early.plies[10].suggestions).toContain("Bc4");
+    // 15...Nxd7 written as an impossible Ka5, with only two moves after it: one fits as read.
+    const late = analyze(OPERA_GAME, { 29: { san: "Ka5", written: "Ka5" }, 31: { san: "Ka5", written: "Ka5" } });
+    expect(late.stoppedAt).toBeNull();
+    expect(late.plies.filter((p) => p.status === "guess").length).toBeGreaterThan(0);
   });
 
   it("reads a sheet in awful handwriting: every third move misread and unclear", () => {

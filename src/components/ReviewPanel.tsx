@@ -100,14 +100,17 @@ function Review({
     const t = setTimeout(saveNow, 800);
     return () => clearTimeout(t);
   }, [saveNow, session.demo, busy, onSave]);
-  const firstToCheck = analysis.plies.find((p) => p.status !== "ok")?.index ?? null;
+  // Open on the move that most needs the person: a typed move that is not legal, then a guess.
+  const firstToCheck =
+    (analysis.plies.find((p) => p.status === "illegal") ?? analysis.plies.find((p) => p.status === "guess") ?? analysis.plies.find((p) => p.status !== "ok"))
+      ?.index ?? null;
   const [selected, setSelected] = useState<number>(firstToCheck ?? START);
   const [flipped, setFlipped] = useState(() => load<boolean>(FLIP_STORAGE) === true);
   // Changing a move on the board: on by default for a move that is not legal.
   const [boardEdit, setBoardEdit] = useState<{ index: number; on: boolean } | null>(null);
 
   const counts = useMemo(() => {
-    const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, skipped: 0, illegal: 0, unchecked: 0 };
+    const c: Record<PlyStatus, number> = { ok: 0, unsure: 0, fixed: 0, guess: 0, skipped: 0, illegal: 0, unchecked: 0 };
     for (const p of analysis.plies) c[p.status]++;
     return { ...c, inserted: analysis.plies.filter((p) => p.inserted).length };
   }, [analysis]);
@@ -158,7 +161,11 @@ function Review({
             Read {Math.ceil(plies.length / 2)} moves.{" "}
             {counts.illegal > 0
               ? `One move needs your fix before the rest can be checked.`
-              : counts.fixed + counts.unsure + counts.skipped > 0
+              : counts.guess > 0
+                ? counts.guess === 1
+                  ? "1 move is a best guess the moves after it do not confirm: please check it."
+                  : `${counts.guess} moves are best guesses the moves after them do not confirm: please check them.`
+                : counts.fixed + counts.unsure + counts.skipped > 0
                 ? counts.fixed + counts.unsure + counts.skipped === 1
                   ? "The game is legal; 1 move is worth a look."
                   : `The game is legal; ${counts.fixed + counts.unsure + counts.skipped} moves are worth a look.`
@@ -166,11 +173,12 @@ function Review({
             {analysis.endState === "checkmate" && " Ends in checkmate."}
           </p>
           <ul className="legend">
+            {counts.guess > 0 && <li className="st-guess">{counts.guess} to check</li>}
             <li className="st-fixed">{counts.fixed} corrected</li>
             <li className="st-unsure">{counts.unsure} unclear</li>
             {counts.inserted > 0 && <li className="st-fixed">{counts.inserted} missing from the sheet</li>}
             {counts.skipped > 0 && <li className="st-skipped">{counts.skipped} left out</li>}
-            <li className="st-illegal">{counts.illegal} not legal</li>
+            {counts.illegal > 0 && <li className="st-illegal">{counts.illegal} not legal</li>}
             {counts.unchecked > 0 && <li className="st-unchecked">{counts.unchecked} not checked yet</li>}
           </ul>
           {extraction.notes && !session.demo && <p className="hint">Note from the reading: {extraction.notes}</p>}
@@ -417,8 +425,9 @@ function Commentary({
               ? "Tap a piece on the board, then its square."
               : "Type a move, pick one below, or change it on the board."}
         </p>
+        {ply.status === "guess" && <p className="hint">Best guesses, most likely first:</p>}
         {ply.suggestions.length > 0 && (
-          <div className="chips" aria-label="Legal moves">
+          <div className="chips" aria-label={ply.status === "guess" ? "Best guesses" : "Legal moves"}>
             {ply.suggestions.slice(0, 12).map((s) => (
               <button key={s} type="button" className="chip" onClick={() => onEdit(withInsert(s))}>
                 {s}
@@ -427,7 +436,7 @@ function Commentary({
           </div>
         )}
         <div className="row">
-          {(ply.status === "fixed" || ply.status === "unsure") && ply.san && (
+          {(ply.status === "fixed" || ply.status === "unsure" || ply.status === "guess") && ply.san && (
             <button type="button" className="secondary" onClick={() => onEdit(withInsert(ply.san!))}>
               {ply.inserted ? `${ply.inserted.san} then ${ply.san} is right` : `${ply.san} is right`}
             </button>

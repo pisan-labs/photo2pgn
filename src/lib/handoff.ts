@@ -108,7 +108,9 @@ export function warningsOf(analysis: Analysis): Warning[] {
     if (!p.san) break; // not checked: the PGN ends before it
     ply++;
     const move = `${plyLabel(p)} ${p.san}`;
-    if (p.status === "fixed") {
+    if (p.status === "guess") {
+      out.push({ ply, kind: "filled", text: `${move}: best guess, not confirmed by the moves after it (the sheet has "${written || "blank"}")` });
+    } else if (p.status === "fixed") {
       out.push({ ply, kind: "filled", text: `${move}: the sheet has "${written || "blank"}"${p.note ? `; ${p.note}` : ""}` });
     } else if (p.status === "unsure") {
       out.push({ ply, kind: "unsure", text: `${move}: unclear handwriting ("${written || "blank"}")` });

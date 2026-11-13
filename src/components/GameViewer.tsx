@@ -11,6 +11,7 @@ export const STATUS_LABEL: Record<PlyStatus, string> = {
   ok: "OK",
   unsure: "Unclear handwriting",
   fixed: "Corrected, please check",
+  guess: "Best guess: please check",
   skipped: "Left out of the game",
   illegal: "Not a legal move",
   unchecked: "Not checked yet",

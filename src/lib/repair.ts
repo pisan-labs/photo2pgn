@@ -14,10 +14,14 @@
 // could explain the failure (the same side's moves with that piece, and the
 // last few plies), even clearly read legal ones, since a confident misreading
 // often only breaks a move several plies later. Guesses among equally
-// distant moves prefer natural ones (recaptures, captures, checks). Stopping
-// is priced per unplayed ply, so a guess that makes the rest of the game
-// legal wins; fixes that come in clusters cost extra, so a chain of fixes
-// through garbage loses to stopping and asking the person. Players also
+// distant moves prefer natural ones (recaptures, captures, checks), and fixes
+// that come in clusters cost extra, so the explanation with the fewest
+// scattered fixes wins. The search never stops at a misreading: it plays the
+// best guess and goes on. A fix the moves after it confirm (or the only legal
+// move) is "fixed"; one they do not is a "guess" for the person to check, with
+// the best guesses ranked by how well the whole game then fits. Only moves
+// written after the game has ended, or a move the person typed that is not
+// legal, end the game early. Players also
 // skip or repeat moves when writing, which shifts every later move into the
 // other column; so a cell can be left out, or a missing move inserted
 // before it, when its reading does not fit and the moves after it then do.
@@ -34,7 +38,7 @@ import {
   type ParsedMove,
 } from "./notation";
 
-export type PlyStatus = "ok" | "unsure" | "fixed" | "skipped" | "illegal" | "unchecked";
+export type PlyStatus = "ok" | "unsure" | "fixed" | "guess" | "skipped" | "illegal" | "unchecked";
 export type ChoiceSource =
   | "edit"
   | "reading"
@@ -43,6 +47,7 @@ export type ChoiceSource =
   | "near-miss"
   | "guess"
   | "backtrack"
+  | "forced"
   | "skip";
 
 export interface PlyInput {
@@ -60,8 +65,8 @@ export interface PlyResult extends PlyInput {
   note: string;
   fenBefore: string | null;
   fenAfter: string | null;
-  suggestions: string[]; // legal moves worth offering in a picker, best first
-  support: number; // for a fixed move: how many following moves fit as read
+  suggestions: string[]; // legal moves worth offering in a picker, best first (for a guess: the best guesses)
+  support: number; // for a fixed move or a guess: how many following moves fit as read
   label: string | null; // the move's number in the game, "12." or "12..."
   // A move missing from the sheet, played just before this cell's move.
   inserted: { san: string; label: string; fenBefore: string; fenAfter: string } | null;
@@ -70,7 +75,7 @@ export interface PlyResult extends PlyInput {
 export interface Analysis {
   plies: PlyResult[];
   legalCount: number; // plies before the first one left unplayed
-  stoppedAt: number | null; // index of that ply
+  stoppedAt: number | null; // index of that ply: a move after the end of the game, or a typed move that is not legal
   finalFen: string;
   endState: "checkmate" | "stalemate" | null;
 }
@@ -93,8 +98,10 @@ const COST = {
   override: 2,
   // A fix within CLUSTER_PLIES of the previous fix: garbage, not handwriting.
   cluster: 2,
-  // Each ply left unplayed when the search gives up.
+  // Each cell written after the game has ended (checkmate or stalemate).
   stopPerPly: 1,
+  // The only legal move, whatever the sheet says: certain, so nearly free.
+  forced: 0.2,
   // A cell that is not a move in the game (repeated or extra on the sheet).
   skip: 3.5,
   // A move missing from the sheet, before this cell (+ the natural-move prior).
@@ -114,6 +121,10 @@ const WINDOW = 20; // how far back backtracking looks
 const BEAM_WIDTH = 48;
 const BEAM_WIDTH_BLANK = 200; // after a blank cell many moves nearly tie
 const GUESSES_FOR_LEGAL = 10; // guesses tried for a legal but doubtful reading
+const BACKTRACK_SPAN = 15; // a backtracked path may cost this much more than the beam's best
+// A fix is confirmed when this many cells after it then fit as read (or it is the only legal move).
+const CONFIRM_SUPPORT = 2;
+const BEST_GUESSES = 6;
 
 /** Flatten scoresheet rows into plies, dropping trailing empty cells. */
 export function rowsToPlies(rows: MoveRow[]): PlyInput[] {
@@ -296,6 +307,12 @@ function candidates(
   // The person's own entry is final: legal or not, nothing else is tried.
   if (edit !== undefined) return { cands: editCandidates(pos, edit, positions), blankGuess: false };
   if (pos.sans.length === 0) return { cands: [], blankGuess: false };
+  // One legal move: it was played, whatever the sheet says.
+  if (pos.sans.length === 1) {
+    const read = exact(pos, info.primary).length > 0;
+    const cost = read ? (info.legibility === "clear" ? 0 : COST.readingUnclear) : COST.forced;
+    return { cands: [{ san: pos.sans[0], cost, source: read ? "reading" : "forced" }], blankGuess: false };
+  }
 
   const out = new Map<string, Candidate>();
   const add = (i: number, cost: number, source: ChoiceSource) => {
@@ -364,14 +381,23 @@ interface Ctx {
   infos: ReadingInfo[];
   edits: Record<number, string>;
   positions: Positions;
-  best: { node: Node; at: number; total: number } | null; // the cheapest place to give up
+  // The cheapest game that ends (checkmate, stalemate) before the sheet does.
+  best: { node: Node; at: number; total: number } | null;
+  // Where every path died: a typed move that is not legal. The deepest, then cheapest.
+  dead: { node: Node; at: number } | null;
 }
 
 const FIXES = new Set<ChoiceSource>(["near-miss", "guess", "backtrack", "skip"]);
 
-function giveUp(ctx: Ctx, node: Node, at: number) {
+/** The game is over at ply `at`: the cells left are after its end. */
+function gameOver(ctx: Ctx, node: Node, at: number) {
   const total = node.cost + COST.stopPerPly * (ctx.plies.length - at);
   if (!ctx.best || total < ctx.best.total) ctx.best = { node, at, total };
+}
+
+function deadEnd(ctx: Ctx, node: Node, at: number) {
+  const d = ctx.dead;
+  if (!d || at > d.at || (at === d.at && node.cost < d.node.cost)) ctx.dead = { node, at };
 }
 
 function lastTo(node: Node): string | null {
@@ -399,7 +425,7 @@ function shiftCandidates(ctx: Ctx, node: Node): Candidate[] {
   const info = ctx.infos[i];
   if (ctx.edits[i] !== undefined || info.blank) return [];
   const pos = ctx.positions.get(node.fen);
-  if (exact(pos, info.primary).length > 0) return [];
+  if (pos.sans.length === 0 || exact(pos, info.primary).length > 0) return [];
   const read = info.legibility === "clear" ? 0 : COST.readingUnclear;
   const w = where(ctx, node);
   const inserts: Candidate[] = [];
@@ -450,11 +476,15 @@ function step(ctx: Ctx, beam: Node[], i: number): { next: Node[]; width: number 
   const proposals: { parent: Node; cand: Candidate; cost: number }[] = [];
   let blank = false;
   beam.forEach((node, rank) => {
-    // Stopping here (ply i left for the person) is always an option.
-    giveUp(ctx, node, i);
+    // Checkmate or stalemate already: the cells left were written after the end.
+    if (ctx.positions.get(node.fen).sans.length === 0 && ctx.edits[i] === undefined) {
+      gameOver(ctx, node, i);
+      return;
+    }
     const { cands, blankGuess } = candidatesAt(ctx, node, false);
     blank ||= blankGuess;
     const shifts = rank < SHIFT_STATES ? shiftCandidates(ctx, node) : [];
+    if (cands.length + shifts.length === 0) deadEnd(ctx, node, i);
     for (const c of [...cands, ...shifts]) {
       proposals.push({ parent: node, cand: c, cost: node.cost + c.cost + pathCost(ctx, node, c) });
     }
@@ -556,7 +586,14 @@ function path(node: Node): Candidate[] {
   return out.reverse();
 }
 
-function search(ctx: Ctx, start: string): { choices: Candidate[]; stoppedAt: number | null } {
+interface SearchResult {
+  choices: Candidate[];
+  stoppedAt: number | null;
+  /** Complete paths other than the chosen one, cheapest first, for ranking best guesses. */
+  others: Candidate[][];
+}
+
+function search(ctx: Ctx, start: string): SearchResult {
   const n = ctx.plies.length;
   let beam: Node[] = [{ fen: start, cost: 0, cand: null, parent: null, depth: 0, lastFix: -99, protectUntil: -1 }];
   let backtracks = 0;
@@ -572,7 +609,7 @@ function search(ctx: Ctx, start: string): { choices: Candidate[]; stoppedAt: num
     const trouble = next.length === 0 || next[0].cost - before.cost >= TROUBLE;
     if (trouble && ctx.edits[i] === undefined && backtracks < MAX_BACKTRACKS) {
       backtracks++;
-      const found = backtrack(ctx, before, i, ctx.best?.total ?? Infinity);
+      const found = backtrack(ctx, before, i, Math.min(ctx.best?.total ?? Infinity, before.cost + BACKTRACK_SPAN));
       next = merge(next, found, width + found.length);
     }
     const ceiling = ctx.best?.total ?? Infinity;
@@ -580,10 +617,13 @@ function search(ctx: Ctx, start: string): { choices: Candidate[]; stoppedAt: num
     reached = i + 1;
   }
 
-  const done = beam.length && reached === n ? beam[0] : null;
-  if (done && (!ctx.best || done.cost <= ctx.best.total)) return { choices: path(done), stoppedAt: null };
-  if (ctx.best) return { choices: path(ctx.best.node), stoppedAt: ctx.best.at };
-  return { choices: [], stoppedAt: 0 };
+  const complete = beam.length && reached === n ? [...beam].sort((a, b) => a.cost - b.cost) : [];
+  const others = complete.slice(1).map(path);
+  const done = complete[0];
+  if (done && (!ctx.best || done.cost <= ctx.best.total)) return { choices: path(done), stoppedAt: null, others };
+  if (ctx.best) return { choices: path(ctx.best.node), stoppedAt: ctx.best.at, others: [] };
+  if (ctx.dead) return { choices: path(ctx.dead.node), stoppedAt: ctx.dead.at, others: [] };
+  return { choices: [], stoppedAt: 0, others: [] };
 }
 
 /** Replay using only the primary readings and edits. Null if any ply fails. */
@@ -644,6 +684,10 @@ function noteFor(info: ReadingInfo, c: Candidate, support: number): string {
       return info.blank
         ? `The cell was blank or unreadable; ${c.san} is a guess.${fits}`
         : `Read as "${read}", which does not fit here; ${c.san} is a guess.${fits}`;
+    case "forced":
+      return info.blank
+        ? `The cell was blank or unreadable; ${c.san} is the only legal move here.`
+        : `Read as "${read}", which does not fit here; ${c.san} is the only legal move here.`;
     case "skip":
       return "";
   }
@@ -673,6 +717,17 @@ function suggestionsFor(ctx: Ctx, fen: string, i: number): string[] {
 }
 
 /**
+ * The moves to offer for a guess: the chosen one, then the other moves the
+ * cheapest complete games play at that ply (with the same moves before it),
+ * then the closest legal moves to the reading.
+ */
+function bestGuesses(chosen: string, i: number, choices: Candidate[], others: Candidate[][], picker: string[]): string[] {
+  const same = (p: Candidate[]) => p.slice(0, i).every((c, k) => c.san === choices[k].san && c.insert === choices[k].insert);
+  const ranked = others.filter(same).map((p) => p[i]).filter((c) => c && !c.skip && !c.insert).map((c) => c.san);
+  return [...new Set([chosen, ...ranked, ...picker])].slice(0, Math.max(BEST_GUESSES, picker.length));
+}
+
+/**
  * Replay the plies, choosing the cheapest legal reading for each.
  * `edits` maps ply index to a move the person typed.
  */
@@ -688,10 +743,11 @@ export function analyzeGame(
     edits: opts.edits ?? {},
     positions: new Positions(),
     best: null,
+    dead: null,
   };
 
   const fast = primaryPath(ctx, start);
-  const { choices, stoppedAt } = fast ? { choices: fast, stoppedAt: null } : search(ctx, start);
+  const { choices, stoppedAt, others } = fast ? { choices: fast, stoppedAt: null, others: [] } : search(ctx, start);
 
   // How many cells after each one were played exactly as read.
   const clean = (c: Candidate) => (c.source === "reading" || c.source === "edit") && !c.insert && !c.skip;
@@ -715,19 +771,36 @@ export function analyzeGame(
       }
       const fenBefore = replay.fen();
       const label = c.skip ? null : labelOf(replay);
+      const onlyMove = !c.skip && !c.insert && ctx.positions.get(fenBefore).sans.length === 1;
       if (!c.skip) replay.move(c.san);
-      const status = statusFor(c, info);
+      let status = statusFor(c, info);
+      let note = noteFor(info, c, support[index]);
+      // A fix the moves after it do not confirm is the person's to check.
+      if (status === "fixed" && support[index] < CONFIRM_SUPPORT && !onlyMove) {
+        status = "guess";
+        note = `${noteFor(info, c, 0)} The moves after it do not confirm it, so please check it: the best guesses are listed first.`;
+      } else if (status === "fixed" && onlyMove) {
+        note = info.blank
+          ? `The cell was blank or unreadable; ${c.san} is the only legal move here.`
+          : `Read as "${info.text}", which does not fit here; ${c.san} is the only legal move here.`;
+      }
+      const picker = suggestionsFor(ctx, inserted?.fenBefore ?? fenBefore, index);
       results.push({
         ...ply,
         index,
         status,
         san: c.skip ? null : c.san,
         source: c.source,
-        note: noteFor(info, c, support[index]),
+        note,
         fenBefore,
         fenAfter: c.skip ? fenBefore : replay.fen(),
-        suggestions: status === "ok" ? [] : suggestionsFor(ctx, inserted?.fenBefore ?? fenBefore, index),
-        support: status === "fixed" || status === "skipped" ? support[index] : 0,
+        suggestions:
+          status === "ok"
+            ? []
+            : status === "guess" && !c.insert
+              ? bestGuesses(c.san, index, choices, others, picker)
+              : picker,
+        support: status === "fixed" || status === "guess" || status === "skipped" ? support[index] : 0,
         label,
         inserted,
       });

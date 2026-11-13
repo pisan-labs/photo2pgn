@@ -19,7 +19,7 @@ test("step through the game with the buttons, the keys and the move list", async
   await expect(page.locator(".cell.selected")).toHaveText("e5");
 
   await page.getByRole("button", { name: "Go to the end" }).click();
-  await expect(caption).toHaveText(/^Not checked yet: fix the move in red/);
+  await expect(caption).toHaveText("After 17. Rd8#");
   await expect(page.getByRole("button", { name: "Next move" })).toBeDisabled();
   await page.keyboard.press("Home");
   await expect(caption).toHaveText("Starting position");

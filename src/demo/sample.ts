@@ -1,8 +1,9 @@
 // A worked example that needs no API call: Morphy's 1858 Opera game, as if
 // read from a handwritten sheet, with the kinds of misreadings real sheets
 // produce: a near miss, an alternative found nine moves back, an unsure
-// reading, castling written with zeros, and a smudged move near the end that
-// is left for the person to pick.
+// reading, castling written with zeros, an impossible move the engine
+// replaces with the only legal one, and a smudged last move: the engine's
+// best guess, which no later move can confirm, left for the person to check.
 import type { Extraction, PlyReading } from "../lib/schema";
 
 const MOVES =
@@ -15,7 +16,8 @@ const MISREAD: Record<number, Partial<PlyReading>> = {
   12: { written: "Qd3", san: "Qd3", alternatives: ["Qb3"], legibility: "unclear" }, // 7. Qb3
   22: { written: "0-0-0", san: "O-O-O" },
   27: { legibility: "unclear", alternatives: ["Qe7"] }, // 14...Qe6
-  31: { written: "Ke7", san: "Ke7" }, // 16...Nxb8: a smudge
+  31: { written: "Ke7", san: "Ke7" }, // 16...Nxb8, the only legal move
+  32: { written: "R_8", san: "R_8", legibility: "unclear", alternatives: [] }, // 17. Rd8#: a smudge
 };
 
 export const DEMO_EXTRACTION: Extraction = {

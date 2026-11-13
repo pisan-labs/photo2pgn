@@ -80,11 +80,15 @@ describe("the link from Chess TD", () => {
 });
 
 describe("the result sent back", () => {
-  it("warns about every corrected, unclear and illegal move, numbered as in the PGN", () => {
+  it("warns about every corrected, unclear and guessed move, numbered as in the PGN", () => {
     const a = analyzeGame(rowsToPlies(DEMO_EXTRACTION.rows));
     const w = warningsOf(a);
-    expect(w.map((x) => x.kind)).toEqual(expect.arrayContaining(["filled", "unsure", "illegal"]));
-    expect(w.at(-1)!.kind).toBe("illegal");
+    expect(w.map((x) => x.kind)).toEqual(expect.arrayContaining(["filled", "unsure"]));
+    expect(w.at(-1)).toMatchObject({ ply: 33, kind: "filled" });
+    expect(w.at(-1)!.text).toMatch(/^17\. Rd8#: best guess, not confirmed/);
+    // A typed move that is not legal ends the game there, and says so.
+    const stopped = warningsOf(analyzeGame(rowsToPlies(DEMO_EXTRACTION.rows), { edits: { 31: "Kd8" } }));
+    expect(stopped.at(-1)).toMatchObject({ ply: 32, kind: "illegal" });
     for (const x of w.filter((x) => x.kind !== "illegal")) {
       // The ply number points at that move in the game.
       const p = a.plies[x.ply - 1];

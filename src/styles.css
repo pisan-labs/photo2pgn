@@ -538,6 +538,17 @@ table.moves {
   border-color: var(--illegal-line);
 }
 
+/* A best guess the later moves do not confirm: the person's to check. */
+.st-guess {
+  background: var(--illegal-bg);
+  border-color: var(--illegal-line);
+  border-style: dashed;
+}
+
+.cell.st-guess {
+  font-weight: 600;
+}
+
 .cell.st-illegal {
   font-weight: 600;
 }

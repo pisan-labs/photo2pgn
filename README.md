@@ -7,7 +7,7 @@ For players, coaches, arbiters and club volunteers who have a pile of paper scor
 1. Take a photo of the sheet with your phone (one or two pages), or upload one. Turn and crop it to the move table if needed.
 2. Claude reads every move, the players, event, date, round, ratings and the result.
 3. A chess engine replays the game, checks every move is legal, and repairs misreadings, even on sheets in awful handwriting (below).
-4. You review on an analysis board: the board on the left, the moves on the right, and buttons (or the arrow keys, Home and End) to go to the start, back, forward and to the end. Corrected or guessed moves are amber, unclear ones blue, a move left to you red. Under the board, each move shows what is on the sheet and the legal moves to pick from. Fix a move by typing it, picking it, or tapping the piece and its square on the board; add a move the player forgot to write, or leave out one written by mistake. Add notes to the game.
+4. You review on an analysis board: the board on the left, the moves on the right, and buttons (or the arrow keys, Home and End) to go to the start, back, forward and to the end. Corrected moves are amber, unclear ones blue, best guesses the later moves do not confirm red. Under the board, each move shows what is on the sheet and the legal moves to pick from. Fix a move by typing it, picking it, or tapping the piece and its square on the board; add a move the player forgot to write, or leave out one written by mistake. Add notes to the game.
 5. Download the `.pgn` file, copy it, email or share it, or open it in Lichess (one click) or Chess.com.
 6. Every game is kept in **My games**, on this device, and in your HintWise account when you are signed in, so a sheet photographed on a phone can be finished on a computer.
 
@@ -34,7 +34,7 @@ Buying credits would be a third way in, offered to a person who is out (`src/lib
 
 ## An honest limitation
 
-A sheet is only as good as its writing. The engine finds the legal game that fits what Claude read, but two different moves can sometimes lead to the same position (6. Bc4 or 6. Qa3 then 7. Qb3, say), and then only the photo can tell. Such moves are always flagged for you. Very faint, torn or crossed-out pages, and games recorded in descriptive notation, read less well.
+A sheet is only as good as its writing. The engine finds the legal game that fits what Claude read, but a wrong move is caught only when it makes a later move impossible. Two different moves can lead to the same position (6. Bc4 or 6. Qa3 then 7. Qb3, say), or a misread move can be legal and leave every later move legal too (6. Bc4 written so it reads "a5" may become 6. a3), and then only the photo can tell. Every move that was not played exactly as read is flagged for you. Very faint, torn or crossed-out pages, and games recorded in descriptive notation, read less well.
 
 ## How bad handwriting is handled
 
@@ -45,9 +45,12 @@ Claude transcribes what it sees, with `_` for characters it cannot make out and 
 - **Guesses:** any legal move, priced by distance from what was read. A small bias favours natural moves (recaptures, captures, checks), which settles blank cells, even three in a row.
 - **Backtracking:** when a move cannot be fitted cheaply, the engine reconsiders earlier moves that could be to blame: the same side's moves with that piece, and the last four plies. It tries every legal move there, even for a clearly written move, and replays the game after it.
 - **Skipped or repeated moves:** when a player forgot to write a move, or wrote one twice, every later move sits in the other column. The engine also tries leaving a cell out, or inserting a missing move before it; the moves after it decide. You can do the same: type `e5 Nf6` to insert e5 before Nf6, or `-` to leave a cell out.
-- **Knowing when to stop:** stopping costs a little per unplayed move; fixes that come in clusters, and fixes to clearly written moves, cost extra. A guess that makes the next 20 moves fit wins; a different game forced onto the sheet, or a smudge two moves from the end, is left as one red move for you.
+- **Wrong moves:** a player can write a legal move that was not the one played, or Claude can misread one into another legal move. The engine takes it as read until a later move becomes impossible, then backtracks to the moves that could be to blame and tries every legal move there; the change is flagged ("legal, but the moves after it only fit Bg4").
+- **It never stops at a misreading:** it plays the best guess and goes on. Fixes that come in clusters, and fixes to clearly written moves, cost extra, so the explanation with the fewest scattered fixes wins. The only legal move is taken whatever the sheet says.
+- **Confirmed or not:** a fix is "corrected" (amber) when at least the next two moves then fit as read, or it is the only legal move. Otherwise it is a "best guess" (red, dashed) for you to check, with the best guesses listed first: the moves the cheapest complete games play there, then the closest legal moves to what was read.
+- **The only stops:** moves written after checkmate or stalemate, and a move you type that is not legal (your entry is final, so the game waits for you there).
 
-The analysis runs in a Web Worker and takes up to about a second on a hard sheet.
+The analysis runs in a Web Worker: well under a second on a clean sheet, about a second and a half on a hard one, and up to three seconds when the sheet stops making sense.
 
 ## For developers
 

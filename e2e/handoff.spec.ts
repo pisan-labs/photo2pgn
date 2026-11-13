@@ -54,9 +54,9 @@ async function readAndCheck(page: Page) {
   await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
   // Chess TD's pairing wins over the handwriting.
   await expect(page.getByLabel("Black", { exact: true })).toHaveValue("Allies");
-  await page.locator(".cell.st-illegal").click();
-  await page.locator(".chip", { hasText: "Nxb8" }).click();
-  await expect(page.locator(".cell.st-illegal")).toHaveCount(0);
+  await page.locator(".cell.st-guess").click();
+  await page.getByRole("button", { name: "Rd8# is right" }).click();
+  await expect(page.locator(".cell.st-guess")).toHaveCount(0);
 }
 
 test("back to the tab that opened it, by message", async ({ context, page, baseURL }) => {
