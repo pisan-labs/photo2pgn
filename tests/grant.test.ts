@@ -1,6 +1,6 @@
 // Admins adding credits through the platform's credits-grant function.
 import { describe, expect, it, vi } from "vitest";
-import { grantCredits, grantProblem, grantUrl } from "../src/lib/grant";
+import { grantCredits, grantProblem, grantUrl, listUsers, shortWhen } from "../src/lib/grant";
 
 const answer = (status: number, body: unknown) => vi.fn(async (_u: string, _i?: RequestInit) => new Response(JSON.stringify(body), { status }));
 const deps = (fetch: ReturnType<typeof answer>) => ({ getToken: async () => "admin-tok", fetch: fetch as unknown as typeof globalThis.fetch, url: "https://auth.test/functions/v1/credits-grant" });
@@ -50,5 +50,33 @@ describe("grantCredits", () => {
 
   it("finds the function on the configured Supabase project", () => {
     expect(grantUrl({ VITE_SUPABASE_URL: "https://auth.hintwise.org/" })).toBe("https://auth.hintwise.org/functions/v1/credits-grant");
+  });
+});
+
+describe("listUsers", () => {
+  const user = { email: "kai@example.com", first_seen: "2026-11-12T10:00:00Z", last_seen: "2026-11-13T09:00:00Z", free_left: 0, free_resets_at: "2026-11-14T00:00:00Z", credits: 4, readings_today: 3, readings_total: 7 };
+
+  it("asks for the list with the admin's token", async () => {
+    const f = answer(200, { app: "photo2pgn", count: 1, users: [user] });
+    expect(await listUsers(deps(f))).toEqual({ ok: true, count: 1, users: [user] });
+    const [, init] = f.mock.calls[0];
+    expect(new Headers(init!.headers).get("authorization")).toBe("Bearer admin-tok");
+    expect(JSON.parse(String(init!.body))).toEqual({ app: "photo2pgn", list: true, limit: 500 });
+  });
+
+  it("says why it did not load", async () => {
+    expect(await listUsers(deps(answer(403, { error: "admin" })))).toMatchObject({ ok: false, message: /not a HintWise admin/ });
+    expect(await listUsers(deps(answer(401, {})))).toMatchObject({ ok: false, message: "Sign in again." });
+    expect(await listUsers(deps(answer(500, {})))).toMatchObject({ ok: false, message: /HTTP 500/ });
+    expect(await listUsers({ getToken: async () => null })).toMatchObject({ ok: false, message: "Sign in again." });
+    const offline = vi.fn(async () => {
+      throw new TypeError("offline");
+    });
+    expect(await listUsers({ getToken: async () => "t", fetch: offline as unknown as typeof fetch, url: "x" })).toMatchObject({ ok: false, message: /Could not reach/ });
+  });
+
+  it("writes times short, in the admin's own time", () => {
+    expect(shortWhen("2026-11-13T09:15:00Z", "en-US")).toMatch(/^[A-Z][a-z]{2}, Nov 13, \d{1,2}:15\s?[AP]M$/);
+    expect(shortWhen("not a date")).toBe("");
   });
 });

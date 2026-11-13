@@ -1297,3 +1297,38 @@ a.button {
   color: var(--text);
   margin: 10px 0 0;
 }
+
+.admin-users-title {
+  font-size: 0.95rem;
+  margin: 20px 0 8px;
+}
+
+/* The people list scrolls sideways on a phone rather than squeezing the emails. */
+.admin-users {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+.admin-users table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+.admin-users th,
+.admin-users td {
+  text-align: left;
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.admin-users th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.admin-users .email {
+  font-weight: 600;
+}

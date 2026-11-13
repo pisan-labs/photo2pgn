@@ -54,3 +54,48 @@ export async function grantCredits(req: { email: string; credits: number; note?:
   if (res.status === 401) return { ok: false, message: "Sign in again." };
   return { ok: false, message: (data.error && ERRORS[data.error]) || `The grant did not go through (HTTP ${res.status}). Try again.` };
 }
+
+// ---- the list of people who have used photo2pgn (admins only) ----
+// POST the same function with {app, list: true, limit?}: most recent first.
+// People are noted on every check and reading; earlier ones come from their
+// readings, credits and saved games (so someone who only ever signed in, before
+// 13 Nov, is not listed).
+
+export interface AppUser {
+  email: string;
+  first_seen: string;
+  last_seen: string;
+  free_left: number | null;
+  free_resets_at: string | null;
+  credits: number;
+  readings_today: number;
+  readings_total: number;
+}
+
+export type ListResult = { ok: true; count: number; users: AppUser[] } | { ok: false; message: string };
+
+export async function listUsers(deps: GrantDeps = {}, limit = 500): Promise<ListResult> {
+  const token = await (deps.getToken ?? currentToken)();
+  if (!token) return { ok: false, message: "Sign in again." };
+  let res: Response;
+  try {
+    res = await (deps.fetch ?? fetch)(deps.url ?? grantUrl(), {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ app: GATEWAY_APP, list: true, limit }),
+    });
+  } catch {
+    return { ok: false, message: "Could not reach HintWise. Check the connection and try again." };
+  }
+  const data = (await res.json().catch(() => ({}))) as { count?: number; users?: AppUser[]; error?: string };
+  if (res.ok && Array.isArray(data.users)) return { ok: true, count: data.count ?? data.users.length, users: data.users };
+  if (res.status === 401) return { ok: false, message: "Sign in again." };
+  return { ok: false, message: (data.error && ERRORS[data.error]) || `The list did not load (HTTP ${res.status}). Try again.` };
+}
+
+/** "Fri 13 Nov, 9:15 AM" in the admin's own time. */
+export function shortWhen(iso: string, locale?: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(locale, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}

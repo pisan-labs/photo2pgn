@@ -49,6 +49,9 @@ describe("legal pages", () => {
     const t = text(read("privacy"));
     for (const who of ["Anthropic", "Supabase", "Netlify", "Paddle", "Lichess", "Chess TD"]) expect(t).toContain(who);
     expect(t).toContain("builder@hintwise.org");
+    // The admin's list of users (owner, 13 Nov): what is kept, and who sees it.
+    expect(t).toContain("when you first and last used it");
+    expect(t).toContain("HintWise's admins can see each person's email address, use and credits");
     // Photos never wait on the server while public readings go through the gateway only;
     // turning the HintWise reader back on needs this page to say so again.
     expect(readFileSync("netlify.toml", "utf8")).toContain('VITE_FREE_READER = "gateway"');

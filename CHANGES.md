@@ -71,3 +71,5 @@
 2026-11-13 [code] Credits slice 1 (Plabs live): "Use my N credits" counts free + bought; admin-only "Admin: add credits" panel (credits-grant, by email, +/-)
 
 2026-11-13 [note] Owner checked live (979d793): "Use my 3 credits" and the admin panel shown, no errors. Next: Paddle (owner account), raise app caps before selling
+
+2026-11-13 [code] Admin panel: "List users" (credits-grant list mode, Plabs live): email, first/last used, free left, credits, readings; Grant per row; Copy emails; privacy draft says so
