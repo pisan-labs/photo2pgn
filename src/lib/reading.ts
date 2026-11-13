@@ -66,8 +66,10 @@ export async function readPhotos(photos: PhotoInput[], plan: ReadPlan): Promise<
     return { kind: "queued", job };
   } catch (err) {
     // The reader cannot take them: the gateway reads them now, and answers
-    // for the person's credits (a sheet costs one credit either way).
-    if (reader === "local-then-gateway" && err instanceof ApiError) return viaGateway();
+    // for the person's credits (a sheet costs one credit either way). Not
+    // when the credits are spoken for by sheets already with the reader:
+    // the gateway would spend them twice.
+    if (reader === "local-then-gateway" && err instanceof ApiError && err.code !== "limit_credits") return viaGateway();
     throw err;
   }
 }

@@ -118,6 +118,7 @@ export default function App() {
     headersFor: (id, h) => (id === handoffJob.current ? hinted(h) : h),
     onSaved: (games) => {
       setSavedTick((t) => t + 1);
+      setChecks((c) => c + 1); // its credit was taken: ask the gateway again
       const asked = games.find((g) => g.id === handoffJob.current);
       if (asked && view.kind === "upload") {
         handoffJob.current = null;

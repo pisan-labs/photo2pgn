@@ -85,3 +85,5 @@
 2026-11-13 [code] Queued sheets: "check back in 1-3 minutes"; GET/DELETE /api/my-jobs; the page collects finished readings into My games (job id = game id); privacy draft says photos can wait
 
 2026-11-13 [note] Plabs: owner dropped the halflife charge/refund platform ask (he will handle it); reader readings take no credit for now
+
+2026-11-13 [code] Reader sheets take one credit: one-token gateway call as the person at first delivery, once per job; queued only with a credit to spare; not deployed

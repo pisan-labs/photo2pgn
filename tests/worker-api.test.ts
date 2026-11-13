@@ -1,6 +1,7 @@
 // The CLI reader queue: sign-in, caps, claims, leases, results, cancel.
 import { describe, expect, it, vi } from "vitest";
-import { HINTWISE_SUPABASE_ANON_KEY, HINTWISE_SUPABASE_URL, loadConfig } from "../netlify/lib/config";
+import { HINTWISE_SUPABASE_ANON_KEY, HINTWISE_SUPABASE_URL, gatewayUrlOf, loadConfig } from "../netlify/lib/config";
+import type { Balance, Charge, GatewayClient } from "../netlify/lib/gateway";
 import { memoryKV } from "../netlify/lib/kv";
 import { supabaseVerifier } from "../netlify/lib/auth";
 import { dayKey, getQuota, release, reserve, weekKey } from "../netlify/lib/quota";
@@ -23,6 +24,22 @@ import { extraction, rowsFrom, OPERA_GAME } from "./helpers";
 const TOKEN = "worker-secret";
 const PNG = btoa("png bytes");
 const LIMITS = { perDay: 2, perWeek: 3, globalPerDay: 5 };
+
+function fakeGateway(start: Balance | null = { allowed: true, left: 5 }, answers: Charge[] = []) {
+  let balance = start;
+  const calls = { balance: [] as string[], charge: [] as [string, string][] };
+  const gw: GatewayClient = {
+    balance: async (token) => {
+      calls.balance.push(token);
+      return balance;
+    },
+    charge: async (token, id) => {
+      calls.charge.push([token, id]);
+      return answers.shift() ?? "charged";
+    },
+  };
+  return { gw, calls, answers, setBalance: (b: Balance | null) => (balance = b) };
+}
 
 function setup(env: Record<string, string> = {}) {
   let clock = new Date("2026-11-12T10:00:00Z");
@@ -110,6 +127,15 @@ describe("settings", () => {
   it("reads PGN_ settings and falls back on bad numbers", () => {
     const c = loadConfig({ PGN_WORKER_TOKEN: " t ", PGN_READER_PER_DAY: "7", PGN_READER_PER_WEEK: "lots" });
     expect(c).toMatchObject({ workerToken: "t", limits: { perDay: 7, perWeek: 10, globalPerDay: 100 } });
+  });
+  it("charges a credit per sheet unless switched off, through the project's gateway", () => {
+    expect(loadConfig({})).toMatchObject({ chargeCredits: true, chargeModel: "claude-opus-5-5", chargeGraceMs: 600_000 });
+    expect(loadConfig({ PGN_CHARGE_CREDITS: "0", PGN_CHARGE_MODEL: "m", PGN_CHARGE_GRACE_MINUTES: "2" })).toMatchObject({
+      chargeCredits: false,
+      chargeModel: "m",
+      chargeGraceMs: 120_000,
+    });
+    expect(gatewayUrlOf({ supabaseUrl: "https://auth.test/" })).toBe("https://auth.test/functions/v1/llm-gateway");
   });
 });
 
@@ -318,6 +344,81 @@ describe("queue", () => {
     await deps.jobs.delete(`job/${job.jobId}`);
     expect((await call.mine()).body.jobs).toEqual([]);
     expect(await deps.jobs.list("mine/")).toEqual([]);
+  });
+
+  it("takes the one credit when a read sheet is first delivered, once, as the person", async () => {
+    const { deps, call } = setup();
+    const { gw, calls } = fakeGateway();
+    deps.gateway = gw;
+    const { body: job } = await call.convert();
+    expect(calls.balance).toEqual(["alice-token"]);
+    const claim = await call.claim(job.jobId);
+    await call.result(job.jobId, { leaseToken: claim.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) });
+    // Not through the old address: the reading goes out where its credit is taken.
+    const early = await call.job(job.jobId, job.viewToken);
+    expect(early.status).toBe("done");
+    expect(early.result).toBeUndefined();
+
+    // Two devices at once: one takes the credit, the other is told to ask again.
+    const both = await Promise.all([call.mine(), call.mine()]);
+    expect(calls.charge).toEqual([["alice-token", job.jobId]]);
+    expect(both.map((r) => r.body.jobs[0].status).sort()).toEqual(["done", "running"]);
+    const again = await call.mine();
+    expect(again.body.jobs[0]).toMatchObject({ status: "done", result: { rows: expect.any(Array) } });
+    expect(calls.charge).toHaveLength(1);
+    expect((await call.job(job.jobId, job.viewToken)).result.rows).toHaveLength(17);
+  });
+
+  it("queues a sheet only while the person has a credit beyond the ones being read", async () => {
+    const { deps, call } = setup();
+    const fake = fakeGateway({ allowed: true, left: 1 });
+    deps.gateway = fake.gw;
+    expect((await call.convert()).status).toBe(202);
+    const second = await call.convert();
+    expect(second).toMatchObject({ status: 429, body: { error: { code: "limit_credits" } } });
+    expect(second.body.error.message).toContain("spoken for by the sheet being read");
+    expect(await call.used()).toBe(1); // the refused one is not counted
+    fake.setBalance({ allowed: false, left: 0 });
+    expect((await call.convert("bob")).body.error.message).toContain("no credits left");
+    // The gateway cannot be asked: the sheet goes in; its credit is taken when it is read.
+    fake.setBalance(null);
+    expect((await call.convert("bob")).status).toBe(202);
+  });
+
+  it("holds a read sheet while the charge fails, then lets it go; a person out of credits still gets it", async () => {
+    const { deps, call, setClock } = setup();
+    const fake = fakeGateway({ allowed: true, left: 5 }, ["error", "error", "out"]);
+    deps.gateway = fake.gw;
+    const read = async (who = "alice") => {
+      const { body: job } = await call.convert(who);
+      const claim = await call.claim(job.jobId);
+      await call.result(job.jobId, { leaseToken: claim.body.leaseToken, extraction: extraction(rowsFrom(OPERA_GAME)) });
+      return job.jobId as string;
+    };
+    const id = await read();
+    expect((await call.mine()).body.jobs[0]).toEqual(expect.objectContaining({ id, status: "running" }));
+    expect((await call.mine()).body.jobs[0].result).toBeUndefined(); // second failure, still within the grace
+    setClock(new Date("2026-11-12T10:11:00Z"));
+    expect((await call.mine()).body.jobs[0]).toMatchObject({ status: "done", result: { rows: expect.any(Array) } }); // out: delivered
+    expect(fake.calls.charge).toHaveLength(3);
+    await call.mine();
+    expect(fake.calls.charge).toHaveLength(3);
+
+    // A charge the gateway keeps failing lets the game go after the grace period.
+    const later = await read("bob");
+    fake.answers.push("error");
+    expect((await call.mine("bob")).body.jobs[0].status).toBe("running");
+    setClock(new Date("2026-11-12T10:22:00Z"));
+    fake.answers.push("error");
+    expect((await call.mine("bob")).body.jobs[0]).toMatchObject({ id: later, status: "done" });
+
+    // A charge cut off half-way is tried again after two minutes.
+    const cut = await read("bob");
+    const cur = (await deps.jobs.getJSON<Record<string, unknown>>(`job/${cut}`))!.value;
+    await deps.jobs.setJSON(`job/${cut}`, { ...cur, charge: { state: "charging", at: "2026-11-12T10:21:30Z" } });
+    expect((await call.mine("bob")).body.jobs.find((j: { id: string }) => j.id === cut).status).toBe("running");
+    await deps.jobs.setJSON(`job/${cut}`, { ...cur, charge: { state: "charging", at: "2026-11-12T10:19:00Z" } });
+    expect((await call.mine("bob")).body.jobs.find((j: { id: string }) => j.id === cut).status).toBe("done");
   });
 
   it("validates photos", async () => {

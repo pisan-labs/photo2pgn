@@ -1,6 +1,6 @@
 # photo2pgn
 
-Photo of a chess scoresheet to PGN, a HintWise app (option B: its own repository). Vite + React; the reading happens in the browser (visitor's own key, or the HintWise gateway); Netlify Functions + Blobs serve only the queue for the owner's CLI reader. Read BRIEFING.md first; the platform rules are in pisanuw/claude-built-apps `docs/new-app-guide.md`.
+Photo of a chess scoresheet to PGN, a HintWise app (option B: its own repository). Vite + React; the reading happens in the browser (visitor's own key, or the HintWise gateway); Netlify Functions + Blobs serve only the queue for the owner's CLI reader; for a sheet it read, a function takes the person's one credit with a one-token gateway call made with their own sign-in token. Read BRIEFING.md first; the platform rules are in pisanuw/claude-built-apps `docs/new-app-guide.md`.
 
 ## Before committing
 

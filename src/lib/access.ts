@@ -50,7 +50,8 @@ export function outOfCreditsFrom(err: unknown, userId: string, now = new Date())
     return { userId, until: (Number.isNaN(at.getTime()) ? nextUtcMidnight(now) : at).toISOString() };
   }
   // The HintWise reader's own counts: per UTC day and ISO week.
-  if (err instanceof ApiError && err.code.startsWith("limit_")) {
+  // (Not limit_credits: the gateway's own check says when credits come back.)
+  if (err instanceof ApiError && err.code.startsWith("limit_") && err.code !== "limit_credits") {
     return { userId, until: (err.code === "limit_week" ? nextUtcMonday(now) : nextUtcMidnight(now)).toISOString() };
   }
   return null;

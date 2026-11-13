@@ -21,6 +21,12 @@ export interface AppConfig {
   maxImageBytes: number; // per image, after decoding
   supabaseUrl: string;
   supabaseAnonKey: string;
+  /** A sheet the reader read costs one credit (owner, 13 Nov); off only to stop the charge in an emergency. */
+  chargeCredits: boolean;
+  /** The model of the one-token gateway call that takes the credit. */
+  chargeModel: string;
+  /** A charge the gateway keeps failing (not "out of credits") stops holding the game back after this long. */
+  chargeGraceMs: number;
 }
 
 // The shared HintWise Supabase project. Public by design: the anon key only
@@ -28,6 +34,11 @@ export interface AppConfig {
 export const HINTWISE_SUPABASE_URL = "https://auth.hintwise.org";
 export const HINTWISE_SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFya3R4bHJseWNlZmZ5b3pkd2hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4ODEwMTAsImV4cCI6MjA5MjQ1NzAxMH0.Vuku-irT3kAHZYibK23q6dpyOEqV_Eg5zB78I3dyshE";
+
+/** The HintWise gateway for the configured Supabase project. */
+export function gatewayUrlOf(config: Pick<AppConfig, "supabaseUrl">): string {
+  return `${config.supabaseUrl.replace(/\/$/, "")}/functions/v1/llm-gateway`;
+}
 
 function int(v: string | undefined, fallback: number): number {
   const n = Number.parseInt(v ?? "", 10);
@@ -49,5 +60,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     maxImageBytes: int(env.PGN_MAX_IMAGE_BYTES, 2_000_000),
     supabaseUrl: env.PGN_SUPABASE_URL?.trim() || HINTWISE_SUPABASE_URL,
     supabaseAnonKey: env.PGN_SUPABASE_ANON_KEY?.trim() || HINTWISE_SUPABASE_ANON_KEY,
+    chargeCredits: env.PGN_CHARGE_CREDITS?.trim() !== "0",
+    chargeModel: env.PGN_CHARGE_MODEL?.trim() || "claude-opus-5-5",
+    chargeGraceMs: int(env.PGN_CHARGE_GRACE_MINUTES, 10) * 60_000,
   };
 }

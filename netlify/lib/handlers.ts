@@ -16,6 +16,7 @@ import type { KV } from "./kv";
 import { sha256Hex, userFrom, type UserVerifier } from "./auth";
 import { dayKey, release, reserve, weekKey } from "./quota";
 import { ExtractionSchema, type Extraction } from "../../src/lib/schema";
+import type { GatewayClient } from "./gateway";
 import { SYSTEM_PROMPT, extractionJsonSchema, userText } from "../../src/lib/prompt";
 
 export interface ImageInput {
@@ -37,6 +38,8 @@ export interface Job {
   result?: Extraction;
   usage?: { model: string; inputTokens: number; outputTokens: number };
   error?: { code: string; message: string };
+  /** The one credit a read sheet costs, taken when it is first delivered. */
+  charge?: { state: "charging" | "charged" | "unpaid"; at: string };
 }
 
 export interface Deps {
@@ -44,6 +47,8 @@ export interface Deps {
   jobs: KV;
   quota: KV;
   verifyUser: UserVerifier;
+  /** Counts a read sheet as one of the person's credits; absent, nothing is charged (tests, dev). */
+  gateway?: GatewayClient;
   now?: () => Date;
 }
 
@@ -105,6 +110,13 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 const nowOf = (deps: Deps) => deps.now?.() ?? new Date();
+const bearer = (req: Request) => {
+  const auth = req.headers.get("authorization") ?? "";
+  return auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+};
+const pendingJob = (job: Job) => job.status === "queued" || job.status === "running";
+// A charge in flight longer than this was cut off (the function stopped): try again.
+const CHARGING_MS = 2 * 60_000;
 
 /** POST /api/convert: queue photos for the CLI reader. Needs a signed-in visitor. */
 export async function handleConvert(req: Request, deps: Deps): Promise<Response> {
@@ -136,6 +148,24 @@ export async function handleConvert(req: Request, deps: Deps): Promise<Response>
   // waits in the queue for a reader started later ("local").
   if (body.onlyIfReaderRunning === true && !(await readerRunning(deps, now))) {
     return fail(503, "reader_idle", "The HintWise reader is not running right now.");
+  }
+
+  // One credit a sheet (owner, 13 Nov): taken once the sheet is read, so a
+  // sheet is queued only while the person has a credit for it beyond the
+  // sheets of theirs already waiting. The browser does not read it through
+  // the gateway instead: that would spend the same credit twice.
+  if (deps.gateway) {
+    const balance = await deps.gateway.balance(bearer(req));
+    if (balance) {
+      const owed = await owedBy(deps, user.id);
+      if (!balance.allowed || (balance.left !== null && balance.left <= owed)) {
+        const message = owed
+          ? `Your credits are spoken for by the sheet${owed === 1 ? "" : "s"} being read. Wait for ${owed === 1 ? "it" : "them"}, or use your own API key.`
+          : "You have no credits left. Use your own API key, or wait for new credits.";
+        return fail(429, "limit_credits", message);
+      }
+    }
+    // The gateway could not be asked: let it through; the charge is taken when it is read.
   }
 
   const identity = `user:${user.id}`;
@@ -226,13 +256,50 @@ export async function handleJob(req: Request, id: string | undefined, deps: Deps
   }
 
   job = await timedOut(deps, job);
-  return json(200, { id: job.id, status: job.status, result: job.result, error: job.error });
+  // The reading itself is delivered through /api/my-jobs, where its credit is taken.
+  const settled = !deps.gateway || job.charge?.state === "charged" || job.charge?.state === "unpaid";
+  return json(200, { id: job.id, status: job.status, result: settled ? job.result : undefined, error: job.error });
+}
+
+/** The person's sheets that will take a credit: waiting, or read and not yet charged. */
+async function owedBy(deps: Deps, userId: string): Promise<number> {
+  let n = 0;
+  for (const key of await deps.jobs.list(`mine/${userId}/`)) {
+    const job = (await deps.jobs.getJSON<Job>(`job/${key.slice(key.lastIndexOf("/") + 1)}`))?.value;
+    const unsettled = job?.status === "done" && job.charge?.state !== "charged" && job.charge?.state !== "unpaid";
+    if (job && (pendingJob(job) || unsettled)) n++;
+  }
+  return n;
+}
+
+/**
+ * Take the credit for a read sheet, exactly once (the job's etag decides
+ * between two devices asking at once). True when the reading may be
+ * delivered: charged, or the person had no credit left (it was read; it is
+ * delivered and noted), or the gateway kept failing past the grace period.
+ * False: not yet, ask again on the next round.
+ */
+async function settle(deps: Deps, token: string, entry: { value: Job; etag: string }): Promise<boolean> {
+  const job = entry.value;
+  if (!deps.gateway || job.status !== "done") return true;
+  const now = nowOf(deps);
+  const c = job.charge;
+  if (c?.state === "charged" || c?.state === "unpaid") return true;
+  if (c?.state === "charging" && now.getTime() - Date.parse(c.at) < CHARGING_MS) return false;
+  const claimed = await deps.jobs.setJSON(`job/${job.id}`, { ...job, charge: { state: "charging", at: now.toISOString() } }, { onlyIfMatch: entry.etag });
+  if (!claimed) return false;
+  const result = await deps.gateway.charge(token, job.id);
+  const graceOver = now.getTime() - Date.parse(job.updatedAt) > deps.config.chargeGraceMs;
+  const state = result === "charged" ? "charged" : result === "out" || graceOver ? "unpaid" : undefined;
+  if (state === "unpaid") console.warn("my-jobs: delivered without a credit", job.id, result);
+  const cur = (await deps.jobs.getJSON<Job>(`job/${job.id}`))?.value ?? job;
+  await deps.jobs.setJSON(`job/${job.id}`, { ...cur, charge: state ? { state, at: now.toISOString() } : undefined });
+  return state !== undefined;
 }
 
 /** A job still waiting after the time limit is failed (and given back to the allowance). */
 async function timedOut(deps: Deps, job: Job): Promise<Job> {
-  const pending = job.status === "queued" || job.status === "running";
-  if (!pending || nowOf(deps).getTime() - new Date(job.createdAt).getTime() <= deps.config.localTimeoutMs) return job;
+  if (!pendingJob(job) || nowOf(deps).getTime() - new Date(job.createdAt).getTime() <= deps.config.localTimeoutMs) return job;
   const message = "No reader picked up these photos in time. Try again, or use your own API key.";
   await finishJob(deps, job, { status: "error", error: { code: "timeout", message } });
   return (await deps.jobs.getJSON<Job>(`job/${job.id}`))?.value ?? job;
@@ -262,7 +329,7 @@ export async function handleMyJobs(req: Request, id: string | undefined, deps: D
     const entry = id ? await deps.jobs.getJSON<Job>(`job/${id}`) : null;
     if (!entry || entry.value.identity !== identity) return fail(404, "not_found", "No such reading.");
     const job = entry.value;
-    if (job.status === "queued" || job.status === "running") {
+    if (pendingJob(job)) {
       await finishJob(deps, job, { status: "error", error: { code: "cancelled", message: "Cancelled." } });
     }
     await deps.jobs.delete(`job/${job.id}`);
@@ -279,13 +346,15 @@ export async function handleMyJobs(req: Request, id: string | undefined, deps: D
       continue;
     }
     const job = await timedOut(deps, entry.value);
+    // Read, and its credit not taken yet: still "running" to the browser, which asks again.
+    const deliver = job.status !== "done" || (await settle(deps, bearer(req), { value: job, etag: entry.etag }));
     jobs.push({
       id: job.id,
-      status: job.status,
+      status: deliver ? job.status : "running",
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       imageCount: job.imageCount,
-      ...(job.result ? { result: job.result } : {}),
+      ...(deliver && job.result ? { result: job.result } : {}),
       ...(job.error ? { error: job.error } : {}),
     });
   }

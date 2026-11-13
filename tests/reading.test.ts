@@ -104,6 +104,15 @@ describe("readPhotos", () => {
       throw new ApiError("limit_day", "Used up");
     };
     await expect(readPhotos(photos, { mode: "free", reader: "local", getToken: async () => "tok", queue: used })).rejects.toMatchObject({ code: "limit_day" });
+    // Credits spoken for by sheets already with the reader: never spent again through the gateway.
+    const spoken = async () => {
+      throw new ApiError("limit_credits", "Spoken for");
+    };
+    const gw = gatewayOk();
+    await expect(
+      readPhotos(photos, { mode: "free", reader: "local-then-gateway", getToken: async () => "tok", queue: spoken, ask: { fetch: gw, gatewayUrl: "https://gw.test" } }),
+    ).rejects.toMatchObject({ code: "limit_credits" });
+    expect(gw).not.toHaveBeenCalled();
     // Anything but the queue's own answers is passed on, even with the gateway behind it.
     const broken = async () => {
       throw new TypeError("bug");

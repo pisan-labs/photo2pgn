@@ -35,6 +35,8 @@ describe("out of credits", () => {
   it("is learned from the HintWise reader's counts: a day, or the ISO week", () => {
     expect(outOfCreditsFrom(new ApiError("limit_day", "Used up"), "u1", now)!.until).toBe("2026-11-13T00:00:00.000Z");
     expect(outOfCreditsFrom(new ApiError("limit_global", "Used up"), "u1", now)!.until).toBe("2026-11-13T00:00:00.000Z");
+    // Credits spoken for by sheets being read: no guess at a reset, the gateway's check says.
+    expect(outOfCreditsFrom(new ApiError("limit_credits", "Spoken for"), "u1", now)).toBeNull();
     expect(outOfCreditsFrom(new ApiError("limit_week", "Used up"), "u1", now)!.until).toBe("2026-11-16T00:00:00.000Z");
     const monday = new Date("2026-11-16T08:00:00Z");
     expect(outOfCreditsFrom(new ApiError("limit_week", "Used up"), "u1", monday)!.until).toBe("2026-11-23T00:00:00.000Z");
