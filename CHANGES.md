@@ -69,3 +69,5 @@
 2026-11-13 [decision] Owner: public readings through the gateway only (VITE_FREE_READER=gateway), so every reading counts as a credit; reader exception dropped from the privacy draft
 
 2026-11-13 [code] Credits slice 1 (Plabs live): "Use my N credits" counts free + bought; admin-only "Admin: add credits" panel (credits-grant, by email, +/-)
+
+2026-11-13 [note] Owner checked live (979d793): "Use my 3 credits" and the admin panel shown, no errors. Next: Paddle (owner account), raise app caps before selling
