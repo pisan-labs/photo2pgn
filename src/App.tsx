@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UploadPanel } from "./components/UploadPanel";
 import { OUT_OF_CREDITS_STORAGE, outOfCreditsFrom, stillOut, type AccessOption, type OutOfCredits } from "./lib/access";
+import { checkAllowance, creditsOf, outMarkOf, type Allowance } from "./lib/allowance";
 import { ReviewPanel, type ReviewSession } from "./components/ReviewPanel";
 import { SignInPanel, useUser } from "./components/SignIn";
 import { fitPhotos, type PreparedImage } from "./lib/image";
@@ -58,10 +59,33 @@ export default function App() {
   // Out of credits: remembered per person until the reset, when it lapses by itself.
   const [outMark, setOutMark] = useState<OutOfCredits | null>(() => load<OutOfCredits>(OUT_OF_CREDITS_STORAGE));
   const [, setClock] = useState(0);
-  const out = stillOut(outMark, user?.id ?? null);
+  // The gateway's own count of the person's readings left (check mode), asked
+  // on sign-in and on each return to the start page; it beats the remembered mark.
+  const [allowance, setAllowance] = useState<Allowance | null>(null);
+  const [checks, setChecks] = useState(0);
+  const onStart = view.kind === "upload";
+  useEffect(() => {
+    if (!user || !signInAvailable || !onStart) return;
+    let live = true;
+    void checkAllowance().then((a) => {
+      if (live) setAllowance(a);
+    });
+    return () => {
+      live = false;
+    };
+  }, [user, signInAvailable, onStart, checks]);
+  const checked = user && allowance ? allowance : null;
+  const credits = checked ? creditsOf(checked) : null;
+  const out = checked && user ? outMarkOf(checked, user.id) : stillOut(outMark, user?.id ?? null);
   useEffect(() => {
     if (!out) return;
-    const t = setTimeout(() => setClock((c) => c + 1), Math.max(1000, Date.parse(out.until) - Date.now() + 1000));
+    const t = setTimeout(
+      () => {
+        setClock((c) => c + 1);
+        setChecks((c) => c + 1);
+      },
+      Math.max(1000, Date.parse(out.until) - Date.now() + 1000),
+    );
     return () => clearTimeout(t);
   }, [out]);
   const [apiKey, setApiKey] = useState(savedKey);
@@ -247,6 +271,7 @@ export default function App() {
               userEmail={user?.email ?? null}
               onOpenSignIn={() => setSignInOpen(true)}
               out={out}
+              credits={credits}
               choice={choice}
               setChoice={setChoice}
               apiKey={apiKey}

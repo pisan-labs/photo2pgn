@@ -1,4 +1,5 @@
-// The terms, refund and privacy pages: the HintWise footer byte for byte, the
+// The terms, refund and privacy pages (drafts in legal/ until the owner approves
+// them; then they move to public/): the HintWise footer byte for byte, the
 // seller and its reseller named, and the numbers taken from src/lib/credits.ts.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -7,7 +8,7 @@ import { CREDIT_PACKS, FREE_PER_DAY, FREE_PER_WEEK, REFUND_DAYS, packLabel } fro
 
 const FOOTER_SHA = "59e0391031a6fb75245c13f761633a8cbecb51ab9ca6311d2c5948170cdea6b3";
 const PAGES = ["terms", "refunds", "privacy"] as const;
-const read = (slug: string) => readFileSync(`public/${slug}.html`, "utf8");
+const read = (slug: string) => readFileSync(`legal/${slug}.html`, "utf8");
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/g, " ").replace(/\s+/g, " ");
 
 describe("legal pages", () => {

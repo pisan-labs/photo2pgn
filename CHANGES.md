@@ -59,3 +59,5 @@
 2026-11-13 [code] Signed in: "Use my credits, new credits every day at <local time of 00:00 UTC>" instead of "Sign in"; "Use my own Anthropic key"; start page centred
 
 2026-11-13 [doc] Drafts: terms, refund (14 days) and privacy pages, HintWise as seller, Paddle as Merchant of Record; packs 20/$5, 50/$10; not linked until the owner approves
+
+2026-11-13 [code] "Use my N credits, new credits at <time>" from the gateway check mode (Plabs, live: 3 a day, 9 a week); template llm.ts recopied; legal drafts moved to legal/ (not served)

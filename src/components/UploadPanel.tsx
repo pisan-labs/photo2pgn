@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { prepareImage, type PreparedImage } from "../lib/image";
 import { PhotoEditor } from "./PhotoEditor";
 import { accessOptions, outMessage, readyToRead, renewalLine, type AccessOption, type OutOfCredits } from "../lib/access";
+import { whenLocal, type Credits } from "../lib/allowance";
 
 interface Props {
   pages: PreparedImage[];
@@ -13,6 +14,8 @@ interface Props {
   onOpenSignIn: () => void;
   /** Signed in, and this person's credits are used up until then. */
   out: OutOfCredits | null;
+  /** The gateway's count for a signed-in person, when it could be asked. */
+  credits?: Credits | null;
   choice: AccessOption;
   setChoice: (c: AccessOption) => void;
   apiKey: string;
@@ -82,8 +85,14 @@ export function UploadPanel(p: Props) {
             <input type="radio" name="access" checked={choice === "sign-in"} onChange={() => p.setChoice("sign-in")} />
             <span>
               {/* Signed in, this is the person's credits; signed out, the way to get them. */}
-              <strong>{p.signedIn ? "Use my credits" : "Sign in"}</strong>
-              <small>{p.signedIn ? renewalLine() : "With Google or an email link."}</small>
+              <strong>{p.signedIn ? creditsLabel(p.credits) : "Sign in"}</strong>
+              <small>
+                {!p.signedIn
+                  ? "With Google or an email link."
+                  : p.credits?.renewsAt
+                    ? `New credits ${whenLocal(p.credits.renewsAt)}.`
+                    : renewalLine()}
+              </small>
               {!p.signedIn && choice === "sign-in" && (
                 <button type="button" className="small" onClick={p.onOpenSignIn}>
                   Sign in
@@ -239,4 +248,10 @@ export function UploadPanel(p: Props) {
       </div>
     </section>
   );
+}
+
+/** "Use my 3 credits", or "Use my credits" when the count is not known. */
+function creditsLabel(c: Credits | null | undefined): string {
+  if (c?.left === null || c?.left === undefined) return "Use my credits";
+  return `Use my ${c.left} credit${c.left === 1 ? "" : "s"}`;
 }
