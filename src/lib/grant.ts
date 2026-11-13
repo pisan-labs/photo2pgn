@@ -63,6 +63,8 @@ export async function grantCredits(req: { email: string; credits: number; note?:
 
 export interface AppUser {
   email: string;
+  name?: string | null; // the HintWise profile's display name (since 13 Nov)
+  counts?: { games?: number }; // per-person numbers from photo2pgn's schema
   first_seen: string;
   last_seen: string;
   free_left: number | null;

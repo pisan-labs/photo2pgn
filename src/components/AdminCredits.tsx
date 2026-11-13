@@ -114,11 +114,13 @@ export function AdminCredits({ onChanged }: { onChanged?: () => void }) {
                 <thead>
                   <tr>
                     <th scope="col">Email</th>
+                    <th scope="col">Name</th>
                     <th scope="col">First used</th>
                     <th scope="col">Last used</th>
                     <th scope="col">Free left</th>
                     <th scope="col">Credits</th>
                     <th scope="col">Readings</th>
+                    <th scope="col">Games</th>
                     <th scope="col">
                       <span className="sr-only">Grant</span>
                     </th>
@@ -128,6 +130,7 @@ export function AdminCredits({ onChanged }: { onChanged?: () => void }) {
                   {users.map((u) => (
                     <tr key={u.email}>
                       <td className="email">{u.email}</td>
+                      <td>{u.name || "–"}</td>
                       <td>{shortWhen(u.first_seen)}</td>
                       <td>{shortWhen(u.last_seen)}</td>
                       <td title={u.free_resets_at ? `More ${shortWhen(u.free_resets_at)}` : undefined}>
@@ -138,6 +141,7 @@ export function AdminCredits({ onChanged }: { onChanged?: () => void }) {
                       <td title="today / in all">
                         {u.readings_today} / {u.readings_total}
                       </td>
+                      <td title="saved in My games">{u.counts?.games ?? 0}</td>
                       <td>
                         <button
                           type="button"

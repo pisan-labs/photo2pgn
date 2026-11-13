@@ -75,3 +75,5 @@
 2026-11-13 [code] Admin panel: "List users" (credits-grant list mode, Plabs live): email, first/last used, free left, credits, readings; Grant per row; Copy emails; privacy draft says so
 
 2026-11-13 [code] Review: tap a piece of the side that moved to replay the move; click the selected move again for ranked alternatives; compact move panel under the buttons
+
+2026-11-13 [code] List users: name and games columns (Plabs live, owner yes); 0003_admin_counts.sql copied byte for byte from claude-built-apps 1b6fc57; migrations pinned by sha256
