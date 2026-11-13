@@ -68,3 +68,14 @@ export function outMessage(mark: OutOfCredits, locale?: string): string {
   const when = at.toLocaleString(locale, { weekday: "short", hour: "numeric", minute: "2-digit" });
   return `Out of credits until ${when}. Use your own Anthropic API key to keep going.`;
 }
+
+/** The free credits renew with the gateway's UTC day: the next 00:00 UTC. */
+export function nextRenewal(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+}
+
+/** "New credits every day at 4:00 PM", in the person's own time. */
+export function renewalLine(now = new Date(), locale?: string): string {
+  const at = nextRenewal(now).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+  return `New credits every day at ${at}.`;
+}

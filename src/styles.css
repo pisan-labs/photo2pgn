@@ -76,6 +76,12 @@ code {
   padding: 0 16px 32px;
 }
 
+/* The start and reading pages are one centred column, header included; the
+   review keeps the full width for the board and the moves. */
+.app.narrow {
+  max-width: 752px;
+}
+
 .top {
   display: flex;
   align-items: center;

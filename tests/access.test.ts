@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { CapReached } from "../src/lib/llm";
 import { ApiError } from "../src/lib/api";
-import { accessOptions, isOwnKey, outMessage, outOfCreditsFrom, readyToRead, stillOut } from "../src/lib/access";
+import { accessOptions, isOwnKey, nextRenewal, outMessage, outOfCreditsFrom, readyToRead, renewalLine, stillOut } from "../src/lib/access";
 
 describe("the ways in", () => {
   it("offers sign-in and the own key, or only the own key", () => {
@@ -56,5 +56,13 @@ describe("out of credits", () => {
 
   it("says when the credits come back and offers the own key", () => {
     expect(outMessage({ userId: "u1", until: "2026-11-13T17:00:00Z" }, "en-US")).toMatch(/^Out of credits until .+\. Use your own Anthropic API key to keep going\.$/);
+  });
+});
+
+describe("new credits", () => {
+  it("come with the gateway's UTC day, shown in the person's time", () => {
+    expect(nextRenewal(new Date("2026-11-13T07:00:00Z")).toISOString()).toBe("2026-11-14T00:00:00.000Z");
+    expect(nextRenewal(new Date("2026-11-13T23:59:59Z")).toISOString()).toBe("2026-11-14T00:00:00.000Z");
+    expect(renewalLine(new Date("2026-11-13T07:00:00Z"), "en-US")).toMatch(/^New credits every day at \d{1,2}:00\s?[AP]M\.$/);
   });
 });

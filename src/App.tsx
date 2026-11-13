@@ -192,7 +192,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${view.kind === "review" ? "" : " narrow"}`}>
       <header className="top">
         <a className="brand" href="/" aria-label="Photo to PGN home">
           <span className="mark" aria-hidden="true">

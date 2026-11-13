@@ -55,3 +55,5 @@
 2026-11-12 [scope] Owner: ways in are Sign in or own key (no "free account" wording, no 1-day note); photo step waits for one; out of credits offers only own key; printable sheet removed
 
 2026-11-13 [decision] Owner: engine never stops at a misreading; best guess, then "guess" status (check it) unless the next 2 moves confirm it or it is the only legal move
+
+2026-11-13 [code] Signed in: "Use my credits, new credits every day at <local time of 00:00 UTC>" instead of "Sign in"; "Use my own Anthropic key"; start page centred

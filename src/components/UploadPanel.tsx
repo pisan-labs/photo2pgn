@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { prepareImage, type PreparedImage } from "../lib/image";
 import { PhotoEditor } from "./PhotoEditor";
-import { accessOptions, outMessage, readyToRead, type AccessOption, type OutOfCredits } from "../lib/access";
+import { accessOptions, outMessage, readyToRead, renewalLine, type AccessOption, type OutOfCredits } from "../lib/access";
 
 interface Props {
   pages: PreparedImage[];
@@ -72,15 +72,18 @@ export function UploadPanel(p: Props) {
 
   return (
     <section className="panel upload" aria-labelledby="access-title">
-      <h2 id="access-title">{options.length > 1 ? "1. Sign in, or use your own key" : "1. Your Anthropic API key"}</h2>
+      <h2 id="access-title">
+        {options.length === 1 ? "1. Your Anthropic API key" : p.signedIn ? "1. Choose how to read it" : "1. Sign in, or use your own key"}
+      </h2>
       {p.out && <p className="notice">{outMessage(p.out)}</p>}
       {options.length > 1 && (
         <div className="choices" role="radiogroup" aria-label="How Claude reads it">
           <label className={`choice${choice === "sign-in" ? " selected" : ""}`}>
             <input type="radio" name="access" checked={choice === "sign-in"} onChange={() => p.setChoice("sign-in")} />
             <span>
-              <strong>Sign in</strong>
-              <small>{p.signedIn ? `Signed in${p.userEmail ? ` as ${p.userEmail}` : ""}.` : "With Google or an email link."}</small>
+              {/* Signed in, this is the person's credits; signed out, the way to get them. */}
+              <strong>{p.signedIn ? "Use my credits" : "Sign in"}</strong>
+              <small>{p.signedIn ? renewalLine() : "With Google or an email link."}</small>
               {!p.signedIn && choice === "sign-in" && (
                 <button type="button" className="small" onClick={p.onOpenSignIn}>
                   Sign in
@@ -91,8 +94,8 @@ export function UploadPanel(p: Props) {
           <label className={`choice${choice === "own-key" ? " selected" : ""}`}>
             <input type="radio" name="access" checked={choice === "own-key"} onChange={() => p.setChoice("own-key")} />
             <span>
-              <strong>Use my own API key</strong>
-              <small>Your Anthropic key, a few cents a sheet.</small>
+              <strong>Use my own Anthropic key</strong>
+              <small>A few cents a sheet, billed by Anthropic.</small>
             </span>
           </label>
         </div>
