@@ -1002,6 +1002,21 @@ table.moves {
   background: rgba(20, 30, 50, 0.35);
 }
 
+/* The starting square of the piece that moved: drop or tap it there to take the move back. */
+.sq.home::after {
+  content: "";
+  position: absolute;
+  width: 74%;
+  height: 74%;
+  border-radius: 50%;
+  border: 3px solid rgba(20, 30, 50, 0.4);
+  box-sizing: border-box;
+}
+
+.board-wrap .put-back {
+  font-size: inherit;
+}
+
 .promo {
   justify-content: center;
   margin-top: 8px;
