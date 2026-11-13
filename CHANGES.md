@@ -89,3 +89,5 @@
 2026-11-13 [code] Reader sheets take one credit: one-token gateway call as the person at first delivery, once per job; queued only with a credit to spare; not deployed
 
 2026-11-13 [code] Buy credits panel (start page, /pricing) with Paddle overlay checkout; off until VITE_PADDLE_* are set, admins see a preview; webhook and legal pages pending
+
+2026-11-13 [decision] Owner: adds bought credits by hand for now (no webhook); deploys the reader charge and the buy panel

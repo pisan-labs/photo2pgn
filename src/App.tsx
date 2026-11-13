@@ -292,8 +292,9 @@ export default function App() {
                   if (window.location.pathname === "/pricing") window.history.replaceState(null, "", "/");
                 }}
                 onPaid={() => {
-                  // The credits come with Paddle's confirmation: ask the gateway again shortly.
-                  for (const ms of [5000, 20000, 60000]) setTimeout(() => setChecks((c) => c + 1), ms);
+                  // The owner adds the credits by hand for now (13 Nov); the count is asked
+                  // again on each return to the start page, and once in a while meanwhile.
+                  for (const ms of [60_000, 300_000]) setTimeout(() => setChecks((c) => c + 1), ms);
                 }}
               />
             )}

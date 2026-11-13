@@ -3,10 +3,11 @@
 // client token and a price for every pack (VITE_PADDLE_*), nothing is for
 // sale: checkoutConfigFrom() is null and only admins see a preview.
 //
-// Also pending, outside this page: the webhook that adds the credits when
-// Paddle confirms a payment. It reads custom_data (app, user_id, pack,
-// credits) from the transaction, so the credits go to the HintWise account
-// that paid whatever email address was typed at checkout.
+// The credits: for now the owner adds them by hand (Admin: add credits)
+// when Paddle reports a payment (owner, 13 Nov). The transaction's
+// custom_data (app, user_id, pack, credits) says whose HintWise account
+// paid, whatever email address was typed at checkout; a webhook can read
+// the same later.
 import { CREDIT_PACKS, type CreditPack } from "./credits";
 
 export interface CheckoutConfig {

@@ -81,7 +81,7 @@ export function BuyCredits({
       </ul>
       {state.kind === "paid" && (
         <p className="ok-note" role="status">
-          Thank you. Your credits arrive within a minute.
+          Thank you. Your credits will be added to your account soon; Paddle emails you the receipt.
         </p>
       )}
       {state.kind === "error" && (
