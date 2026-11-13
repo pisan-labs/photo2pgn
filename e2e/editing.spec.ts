@@ -69,3 +69,48 @@ test("add a move the player forgot to write, then undo it", async ({ page }) => 
   await page.getByRole("button", { name: "Undo my change" }).click();
   await expect(page.locator(".cell .ins")).toHaveCount(0);
 });
+
+test("drag a piece straight to its new square, and the board shows it at once", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Try the demo game instead" }).click();
+  // 8...c6 as read; drag the pawn from c6 to c5 to play 8...c5 instead.
+  await page.locator(".cell", { hasText: /^c6$/ }).click();
+  const center = async (label: string) => {
+    const b = (await page.getByRole("button", { name: label }).boundingBox())!;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+  const a = await center("c6 black p");
+  const b = await center("c5");
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 4 });
+  await expect(page.locator(".drag-pc")).toBeVisible();
+  await page.mouse.move(b.x, b.y, { steps: 4 });
+  await page.mouse.up();
+  // At once, before the game is checked again: the pawn is on c5, not back on c6.
+  const now = await page.evaluate(() => ({
+    c5: Boolean(document.querySelector('[aria-label="c5 black p"]')),
+    c6: Boolean(document.querySelector('[aria-label="c6 black p"]')),
+  }));
+  expect(now).toEqual({ c5: true, c6: false });
+  await expect(page.locator(".cell", { hasText: /^c5$/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "c5 black p" })).toBeVisible();
+  await page.getByRole("button", { name: "Undo my change" }).click();
+  await expect(page.locator(".cell", { hasText: /^c6$/ })).toBeVisible();
+});
+
+test("a drop on a square the piece cannot reach changes nothing", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Try the demo game instead" }).click();
+  await page.locator(".cell", { hasText: /^c6$/ }).click();
+  const box = async (label: string) => (await page.getByRole("button", { name: label }).boundingBox())!;
+  const a = await box("c6 black p");
+  const b = await box("h3");
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.getByRole("button", { name: "c6 black p" })).toBeVisible();
+  await expect(page.locator(".cell", { hasText: /^c6$/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Undo my change" })).toHaveCount(0);
+});

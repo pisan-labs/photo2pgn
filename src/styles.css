@@ -1424,3 +1424,28 @@ a.button {
 .alt-actions {
   gap: 12px;
 }
+
+/* Dragging a piece: it follows the pointer; the square it came from shows a ghost. */
+.board-wrap {
+  position: relative;
+}
+
+.board.interactive {
+  touch-action: none;
+}
+
+.board.dragging,
+.board.dragging .sq {
+  cursor: grabbing;
+}
+
+.pc.lifted {
+  opacity: 0.3;
+}
+
+.drag-pc {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.35));
+}
