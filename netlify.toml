@@ -24,6 +24,12 @@
   to = "/index.html"
   status = 200
 
+# photo2pgn.hintwise.org/install: the app, which shows how to install it.
+[[redirects]]
+  from = "/install"
+  to = "/index.html"
+  status = 200
+
 # One address for the app: the netlify.app name sends people to hintwise.org.
 [[redirects]]
   from = "https://photo2pgn.netlify.app/*"

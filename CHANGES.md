@@ -95,3 +95,5 @@
 2026-11-13 [code] Board: the piece that moved stays put when touched; drop or tap it on its ringed starting square to take the move back, then play any piece; Put the move back
 
 2026-11-15 [code] Several sheets at once: up to 10 photos, one game each (Add page / Same game as sheet N for 2-page games), read 2 at a time, saved in My games; stops when credits run out
+
+2026-11-15 [code] /install page: one Install button where the browser offers it, else per-browser steps (iPhone Share > Add to Home Screen, Android menu, desktop: open on the phone)
