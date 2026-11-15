@@ -15,7 +15,7 @@ For players, coaches, arbiters and club volunteers who have a pile of paper scor
 
 The demo button runs the whole review on a sample game with no account and no key.
 
-**On a phone** it works like a native mobile app: add it to the home screen (the "install Photo to PGN" tip on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it. The link to send people is **photo2pgn.hintwise.org/install**: one Install button where the browser offers it (Android Chrome, desktop Chrome and Edge), otherwise the steps for that browser (iPhone: Share > Add to Home Screen; no web page can install itself there).
+**On a phone** it works like a native mobile app: add it to the home screen (the "install Photo to PGN" tip on Android, Share > Add to Home Screen on iPhone). On Android, photos in the gallery can be shared straight into it (up to 10, each as its own sheet). The link to send people is **photo2pgn.hintwise.org/install**: one Install button where the browser offers it (Android Chrome, desktop Chrome and Edge), otherwise the steps for that browser (iPhone: Share > Add to Home Screen; no web page can install itself there).
 
 ## Sign in, or use your own key
 

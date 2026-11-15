@@ -4,10 +4,12 @@
 //   cached as they are loaded (the reading itself still needs a connection).
 // - Receives photos shared from other apps on Android (the manifest's
 //   share_target): they go into this phone's Cache Storage, never to a
-//   server, and the page picks them up as pages of the sheet.
+//   server, and the page picks them up, each photo as its own sheet (up to
+//   MAX_SHARED, the page's limit of sheets at a time).
 // It never touches /api/* or other sites (sign-in, the gateway, Anthropic).
 const SHELL = "photo2pgn-shell-v1";
 const SHARED = "photo2pgn-shared";
+const MAX_SHARED = 10; // src/lib/batch.ts MAX_SHEETS
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -42,7 +44,7 @@ async function receiveShare(request) {
   const files = form
     .getAll("photos")
     .filter((f) => typeof f === "object" && f && String(f.type).startsWith("image/"))
-    .slice(0, 2);
+    .slice(0, MAX_SHARED);
   const cache = await caches.open(SHARED);
   for (const key of await cache.keys()) await cache.delete(key);
   await Promise.all(

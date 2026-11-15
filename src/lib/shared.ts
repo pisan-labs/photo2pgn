@@ -6,7 +6,9 @@ export const SHARED_CACHE = "photo2pgn-shared";
 export async function takeSharedPhotos(store: CacheStorage | undefined = globalThis.caches): Promise<File[]> {
   if (!store) return [];
   const cache = await store.open(SHARED_CACHE);
-  const keys = [...(await cache.keys())].sort((a, b) => a.url.localeCompare(b.url));
+  // In the order they were shared: /shared/0, /shared/1, ... /shared/10 by number, not as text.
+  const index = (r: Request) => Number(new URL(r.url, "http://x").pathname.split("/").pop()) || 0;
+  const keys = [...(await cache.keys())].sort((a, b) => index(a) - index(b));
   const files: File[] = [];
   for (const key of keys) {
     const res = await cache.match(key);

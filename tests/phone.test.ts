@@ -20,6 +20,8 @@ function fakeCaches(entries: Record<string, Response>) {
 describe("photos shared into the app", () => {
   it("takes them out of the cache once, in order, with their names", async () => {
     const f = fakeCaches({
+      "/shared/10": new Response(new Blob(["eleven"], { type: "image/jpeg" }), { headers: { "x-name": "game%2011.jpg" } }),
+      "/shared/2": new Response(new Blob(["three"], { type: "image/jpeg" }), { headers: { "x-name": "game%203.jpg" } }),
       "/shared/1": new Response(new Blob(["two"], { type: "image/jpeg" }), { headers: { "x-name": "page%202.jpg" } }),
       "/shared/0": new Response(new Blob(["one"], { type: "image/png" }), { headers: { "x-name": "page%201.png" } }),
     });
@@ -28,6 +30,8 @@ describe("photos shared into the app", () => {
     expect(files.map((x) => [x.name, x.type])).toEqual([
       ["page 1.png", "image/png"],
       ["page 2.jpg", "image/jpeg"],
+      ["game 3.jpg", "image/jpeg"],
+      ["game 11.jpg", "image/jpeg"],
     ]);
     expect(f.store.size).toBe(0);
     expect(await takeSharedPhotos(f.caches)).toEqual([]);

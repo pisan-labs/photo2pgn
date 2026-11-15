@@ -75,7 +75,7 @@ test.describe("on a phone", () => {
 test.describe("installed app", () => {
   test.use(phone("Pixel 7"));
 
-  test("photos shared from the gallery arrive as pages", async ({ page }) => {
+  test("photos shared from the gallery arrive, each as its own sheet", async ({ page }) => {
     await page.goto("/");
     await page.evaluate(async () => {
       await navigator.serviceWorker.ready;
@@ -87,17 +87,18 @@ test.describe("installed app", () => {
     const status = await page.evaluate(async (b64) => {
       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       const form = new FormData();
-      form.append("photos", new File([bytes], "sheet.png", { type: "image/png" }));
+      for (const name of ["game-1.png", "game-2.png", "game-3.png"]) form.append("photos", new File([bytes], name, { type: "image/png" }));
       const res = await fetch("/share-target", { method: "POST", body: form, redirect: "manual" });
       return res.type;
     }, png);
     expect(status).toBe("opaqueredirect");
     await page.goto("/?shared=1");
     await expect(page).toHaveURL(/\/$/);
-    // The shared photo waits until there is a way to read it, then arrives as page 1.
-    await expect(page.getByText("Page 1")).toHaveCount(0);
+    // The shared photos wait until there is a way to read them, then arrive as three sheets.
+    await expect(page.getByRole("heading", { name: /^Sheet \d$/ })).toHaveCount(0);
     await page.getByLabel("API key", { exact: true }).fill("sk-ant-phone-0123456789");
-    await expect(page.getByText("Page 1")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^Sheet \d$/ })).toHaveCount(3);
+    await expect(page.getByRole("button", { name: "Read 3 scoresheets" })).toBeEnabled();
   });
 
   test("the manifest makes it installable", async ({ page, request }) => {
