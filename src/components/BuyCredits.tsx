@@ -1,6 +1,6 @@
-// Buying credits: the packs, and Paddle's checkout over the page. Shown to
-// everyone once the build has Paddle settings, and until then to admins
-// only, as a preview whose buttons say what is missing.
+// Buying credits: the packs, and Paddle's checkout over the page. The prices
+// are public at /pricing (owner, 15 Nov); until the build has Paddle settings
+// the buttons say "Coming soon", and admins see why.
 import { useEffect, useRef, useState } from "react";
 import { CREDIT_PACKS, FREE_PER_DAY, FREE_PER_WEEK, REFUND_DAYS, packLabel, type CreditPack } from "../lib/credits";
 import { openCheckout, perCredit, type Buyer, type CheckoutConfig } from "../lib/checkout";
@@ -13,8 +13,11 @@ export function BuyCredits({
   onSignIn,
   onClose,
   onPaid,
+  admin = false,
 }: {
   config: CheckoutConfig | null;
+  /** An admin sees why nothing can be bought yet. */
+  admin?: boolean;
   /** Signed in: who pays. Signed out: buying needs an account. */
   buyer: Buyer | null;
   onSignIn: () => void;
@@ -54,7 +57,9 @@ export function BuyCredits({
       </div>
       {!config && (
         <p className="notice">
-          Preview for admins: Paddle is not connected yet, so nothing can be bought and nobody else sees this.
+          {admin
+            ? "Admins: Paddle is not connected yet (the VITE_PADDLE_* build settings), so the buttons are off. Everyone sees these prices at /pricing."
+            : "Buying opens soon. Until then, use your free credits or your own Anthropic API key."}
         </p>
       )}
       <p>
@@ -67,8 +72,12 @@ export function BuyCredits({
               <strong>{packLabel(p)}</strong>
               <small>{perCredit(p)}</small>
             </span>
-            {buyer ? (
-              <button type="button" className="primary" disabled={!config || state.kind === "opening"} onClick={() => void buy(p)}>
+            {!config ? (
+              <button type="button" className="secondary" disabled>
+                Coming soon
+              </button>
+            ) : buyer ? (
+              <button type="button" className="primary" disabled={state.kind === "opening"} onClick={() => void buy(p)}>
                 {state.kind === "opening" && state.pack === p.id ? "Opening…" : "Buy"}
               </button>
             ) : (

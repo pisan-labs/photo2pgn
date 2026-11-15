@@ -109,3 +109,5 @@
 2026-11-15 [decision] Owner: publish the terms, refund and privacy pages (drafts of 13 Nov, unchanged) at /terms, /refunds, /privacy
 
 2026-11-15 [code] Legal pages moved to public/, short addresses in netlify.toml, footer links; service worker keeps only app pages as the offline page
+
+2026-11-15 [decision] Owner: prices public at /pricing before Paddle is connected (Paddle's website check); footer links Pricing, Terms, Refunds, Privacy
