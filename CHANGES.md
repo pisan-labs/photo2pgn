@@ -123,3 +123,5 @@
 2026-11-15 [note] Readiness for Paddle verification: terms/refunds/privacy live (200, own titles), description present; contact only as the footer's project-idea email; catalog check pending paddle-live
 
 2026-11-15 [decision] Owner (no answer, recommendation taken): with live Paddle settings only admins can buy until VITE_PADDLE_OPEN=yes, so the live test runs on the real domain before sales open
+
+2026-11-15 [decision] Owner (no answer, recommendation taken): Contact link (builder@hintwise.org) in the app footer for Paddle verification; Retain pwCustomer skipped (no subscriptions)
