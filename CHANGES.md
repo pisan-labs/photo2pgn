@@ -117,3 +117,7 @@
 2026-11-15 [decision] Owner: live test through the paddle-live MCP; PGN_PADDLE_ENV and PGN_PADDLE_API_KEY (the sandbox key, unused) off Netlify, kept commented in local .env
 
 2026-11-15 [code] Checkout: the client token prefix picks live or sandbox (live_/test_), VITE_PADDLE_ENV optional; a mismatch or a non-pri_ price sells nothing, admins see why
+
+2026-11-15 [code] Paddle webhook: only Paddle's addresses (api.paddle.com/ips, kept an hour, never hard-coded), else 403; 503 when the list cannot be had; .env.example lists the Paddle settings
+
+2026-11-15 [note] Readiness for Paddle verification: terms/refunds/privacy live (200, own titles), description present; contact only as the footer's project-idea email; catalog check pending paddle-live

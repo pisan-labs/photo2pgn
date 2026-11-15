@@ -2,7 +2,10 @@
 // the pack from the price id, the owner's list. No network.
 import { describe, expect, it } from "vitest";
 import { memoryKV } from "../netlify/lib/kv";
-import { handlePaddleWebhook, handlePaymentGranted, handlePayments, paddleConfigFrom, validSignature, type Payment } from "../netlify/lib/paddle";
+import { PADDLE_IPS_URL, handlePaddleWebhook, handlePaymentGranted, handlePayments, inCidrs, paddleConfigFrom, paddleIps, validSignature, type Payment } from "../netlify/lib/paddle";
+
+const PADDLE_IP = "34.237.3.244";
+const IPS = ["34.237.3.244/32", "52.11.166.252/32"];
 
 const SECRET = "pdl_ntfset_test";
 const NOW = new Date("2026-11-15T12:00:00Z");
@@ -20,9 +23,9 @@ const txn = (id: string, price = "pri_50") =>
     data: { id, customer_id: "ctm_1", currency_code: "USD", items: [{ price: { id: price } }], details: { totals: { grand_total: "1000" } }, custom_data: { user_id: "u1", email: "a@example.com", credits: 9999 } },
   });
 
-function setup(cfg = config) {
+function setup(cfg = config, clientIp: string | null = PADDLE_IP, ips: string[] | null = IPS) {
   const payments = memoryKV();
-  const deps = { config: cfg, payments, now: () => NOW };
+  const deps = { config: cfg, payments, now: () => NOW, clientIp, allowedIps: async () => ips };
   const post = async (body: string, header?: string | null) => {
     const headers: Record<string, string> = {};
     const sig = header === undefined ? await sign(body) : header;
@@ -44,10 +47,55 @@ describe("signature", () => {
   });
 });
 
+describe("Paddle's addresses", () => {
+  it("matches IPv4 CIDR blocks", () => {
+    expect(inCidrs("34.237.3.244", IPS)).toBe(true);
+    expect(inCidrs("34.237.3.245", IPS)).toBe(false);
+    expect(inCidrs("10.1.2.3", ["10.0.0.0/8"])).toBe(true);
+    expect(inCidrs("11.1.2.3", ["10.0.0.0/8"])).toBe(false);
+    expect(inCidrs("1.2.3.4", ["0.0.0.0/0"])).toBe(true);
+    expect(inCidrs("2001:db8::1", IPS)).toBe(false);
+    expect(inCidrs("256.1.1.1", ["0.0.0.0/0"])).toBe(false);
+    expect(inCidrs("1.2.3.4", ["1.2.3.4/33", "x/8", "1.2.3/24"])).toBe(false);
+  });
+
+  it("fetches the list from Paddle, keeps it an hour, and falls back to the last good one", async () => {
+    const urls: string[] = [];
+    let answer: () => Response = () => Response.json({ data: { ipv4_cidrs: IPS } });
+    const fetcher = (async (url: string) => {
+      urls.push(url);
+      return answer();
+    }) as unknown as typeof fetch;
+    const ips = paddleIps(fetcher, 1000);
+    expect(await ips(0)).toEqual(IPS);
+    expect(await ips(999)).toEqual(IPS);
+    expect(urls).toEqual([PADDLE_IPS_URL]); // kept
+    answer = () => new Response("down", { status: 502 });
+    expect(await ips(1000)).toEqual(IPS); // stale, not none
+    answer = () => Response.json({ data: { ipv4_cidrs: [] } });
+    expect(await ips(2000)).toEqual(IPS);
+    expect(urls).toHaveLength(3);
+    const never = paddleIps((async () => new Response("down", { status: 500 })) as unknown as typeof fetch);
+    expect(await never()).toBeNull();
+    const garbage = paddleIps((async () => Response.json({ data: { ipv4_cidrs: [1] } })) as unknown as typeof fetch);
+    expect(await garbage()).toBeNull();
+  });
+});
+
 describe("webhook", () => {
   it("is off without a secret", async () => {
     const { post } = setup({ ...config, webhookSecret: null });
     expect((await post(txn("txn_1"))).status).toBe(503);
+  });
+
+  it("lets in only Paddle's addresses, and asks Paddle to retry when its list cannot be had", async () => {
+    for (const ip of ["203.0.113.9", "", null]) {
+      const { post, payments } = setup(config, ip);
+      expect((await post(txn("txn_1"))).status).toBe(403);
+      expect(await payments.list("payment/")).toEqual([]);
+    }
+    expect((await setup(config, `::ffff:${PADDLE_IP}`).post(txn("txn_1"))).status).toBe(200);
+    expect((await setup(config, PADDLE_IP, null).post(txn("txn_1"))).status).toBe(503);
   });
 
   it("answers a bad signature with a non-2xx and records nothing", async () => {
