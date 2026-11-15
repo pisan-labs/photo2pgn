@@ -10,6 +10,8 @@
 const SHELL = "photo2pgn-shell-v1";
 const SHARED = "photo2pgn-shared";
 const MAX_SHARED = 10; // src/lib/batch.ts MAX_SHEETS
+/** Addresses that serve the app itself (netlify.toml sends /install and /pricing to it). */
+const APP_PAGES = ["/", "/index.html", "/install", "/pricing"];
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -35,7 +37,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
-  if (event.request.mode === "navigate") event.respondWith(networkFirst(event.request));
+  // Only the app's own pages are kept as the offline page: a visit to the
+  // terms or privacy page must not become what the app shows offline.
+  if (event.request.mode === "navigate") {
+    if (APP_PAGES.includes(url.pathname)) event.respondWith(networkFirst(event.request));
+  }
   else if (url.pathname.startsWith("/assets/")) event.respondWith(cacheFirst(event.request));
 });
 

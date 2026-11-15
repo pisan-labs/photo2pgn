@@ -105,3 +105,7 @@
 2026-11-15 [decision] Owner: photo2pgn gets its own logo instead of the HintWise icon (favicon, header, app icons); the HintWise footer stays byte for byte
 
 2026-11-15 [code] Logo: knight in viewfinder corners (src/assets/logo.svg), icons 192/512/maskable/apple-touch; install: "See how" tip on Android without the button, "already on this phone" via getInstalledRelatedApps
+
+2026-11-15 [decision] Owner: publish the terms, refund and privacy pages (drafts of 13 Nov, unchanged) at /terms, /refunds, /privacy
+
+2026-11-15 [code] Legal pages moved to public/, short addresses in netlify.toml, footer links; service worker keeps only app pages as the offline page

@@ -146,3 +146,15 @@ test("several sheets at once: each is read as its own game and saved in My games
   await batch.getByRole("button", { name: "Close" }).click();
   await expect(batch).toHaveCount(0);
 });
+
+test("the terms, refund and privacy pages are published and linked from the footer", async ({ page }) => {
+  await page.goto("/");
+  for (const [slug, title] of [["terms", "Terms of service"], ["refunds", "Refund policy"], ["privacy", "Privacy policy"]]) {
+    await expect(page.locator("footer.foot").getByRole("link", { name: slug[0].toUpperCase() + slug.slice(1) })).toHaveAttribute("href", `/${slug}`);
+    // vite preview has no Netlify redirects: the files themselves.
+    await page.goto(`/${slug}.html`);
+    await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+    await expect(page.locator("site-footer")).toHaveCount(1);
+    await page.goto("/");
+  }
+});
