@@ -98,7 +98,7 @@ export async function openCheckout(
   paddle.Checkout.open({
     items: [{ priceId: config.prices[pack.id], quantity: 1 }],
     ...(buyer.email ? { customer: { email: buyer.email } } : {}),
-    customData: { app: "photo2pgn", user_id: buyer.userId, pack: pack.id, credits: pack.credits },
+    customData: { app: "photo2pgn", user_id: buyer.userId, pack: pack.id, credits: pack.credits, ...(buyer.email ? { email: buyer.email } : {}) },
     settings: { displayMode: "overlay", theme: "light" },
   });
 }

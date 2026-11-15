@@ -163,3 +163,7 @@ Tests never touch the network: the template modules take fakes, the CLI tests us
 | `dev/`, `e2e/`, `tests/` | Dev API, fake `claude`; Playwright; vitest |
 
 The chess pieces are Cburnett's from Wikimedia Commons, used under the 3-clause BSD licence (`src/assets/pieces/LICENSE.txt`, served as `/piece-images-license.txt`). The board colours are chess-analyzer's "Walnut wood".
+
+## Paddle purchases
+
+`POST /api/paddle-webhook` records each `transaction.completed` (one record per transaction id, in the `payments` blob store); it never grants credits. Set on Netlify `PGN_PADDLE_WEBHOOK_SECRET` (the notification destination's secret, not the API key) and a price id per pack, `PGN_PADDLE_PRICE_PACK_20` and `PGN_PADDLE_PRICE_PACK_50`. The signature is checked on the raw body; a bad one gets a 401 so Paddle retries. The owner adds the credits by hand with `credits-grant`; `GET /api/worker/payments` (Bearer `PGN_WORKER_TOKEN`) lists what is still owed, and `POST /api/worker/payments/:id/granted` marks one done.

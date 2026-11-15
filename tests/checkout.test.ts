@@ -49,7 +49,7 @@ describe("checkout", () => {
     expect(paddle.Checkout.open).toHaveBeenCalledWith({
       items: [{ priceId: "pri_50", quantity: 1 }],
       customer: { email: "a@example.com" },
-      customData: { app: "photo2pgn", user_id: "u1", pack: "pack-50", credits: 50 },
+      customData: { app: "photo2pgn", user_id: "u1", pack: "pack-50", credits: 50, email: "a@example.com" },
       settings: { displayMode: "overlay", theme: "light" },
     });
     fire("checkout.loaded");
