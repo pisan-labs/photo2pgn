@@ -364,7 +364,7 @@ export async function handleMyJobs(req: Request, id: string | undefined, deps: D
 
 // ---- CLI reader endpoints (Authorization: Bearer PGN_WORKER_TOKEN) ----
 
-async function workerAuthorized(req: Request, config: AppConfig): Promise<boolean> {
+export async function workerAuthorized(req: Request, config: AppConfig): Promise<boolean> {
   if (!config.workerToken) return false;
   const auth = req.headers.get("authorization") ?? "";
   const given = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
