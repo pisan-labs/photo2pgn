@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { CREDIT_PACKS, FREE_PER_DAY, FREE_PER_WEEK, REFUND_DAYS, packLabel } from "../src/lib/credits";
+import { faviconSvg, logoSvg } from "./logo";
 
 const FOOTER_SHA = "59e0391031a6fb75245c13f761633a8cbecb51ab9ca6311d2c5948170cdea6b3";
 const PAGES = ["terms", "refunds", "privacy"] as const;
@@ -20,7 +21,7 @@ describe("legal pages", () => {
       const start = html.indexOf(open);
       const markup = html.slice(start, html.indexOf("</site-footer>", start) + "</site-footer>".length);
       expect(createHash("sha256").update(markup).digest("hex")).toBe(FOOTER_SHA);
-      expect(html).toMatch(/<link rel="icon" href="data:image\/svg\+xml,[^"]*%23312E81/);
+      expect(faviconSvg(html)).toBe(logoSvg());
       expect(text(html)).toContain("HintWise");
       for (const other of PAGES.filter((p) => p !== slug)) expect(html).toContain(`href="/${other}.html"`);
     });

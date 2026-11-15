@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SHARED_CACHE, takeSharedPhotos } from "../src/lib/shared";
-import { installWay, iosShareHint, isIos } from "../src/lib/install";
+import { installWay, iosShareHint, isAppInstalled, isIos } from "../src/lib/install";
 
 function fakeCaches(entries: Record<string, Response>) {
   const store = new Map(Object.entries(entries));
@@ -63,6 +63,19 @@ describe("the install page", () => {
     expect(way(iphone)).toBe("ios");
     expect(way(android)).toBe("android-menu");
     expect(way(mac)).toBe("desktop");
+    // Already on the phone, opened in the browser: say so, whatever else the browser offers.
+    expect(installWay({ standalone: false, canPrompt: true, ua: android, appInstalled: true })).toBe("on-phone");
+    expect(installWay({ standalone: true, canPrompt: false, ua: android, appInstalled: true })).toBe("installed");
+  });
+
+  it("asks Chrome whether the app is on this phone, and assumes not elsewhere", async () => {
+    const nav = (apps: unknown[] | Error) =>
+      ({ getInstalledRelatedApps: async () => (apps instanceof Error ? Promise.reject(apps) : apps) }) as unknown as Navigator;
+    expect(await isAppInstalled(nav([{ platform: "webapp", url: "https://photo2pgn.hintwise.org/manifest.webmanifest" }]))).toBe(true);
+    expect(await isAppInstalled(nav([]))).toBe(false);
+    expect(await isAppInstalled(nav(new Error("not allowed")))).toBe(false);
+    expect(await isAppInstalled({} as Navigator)).toBe(false);
+    expect(await isAppInstalled(undefined)).toBe(false);
   });
 
   it("says where Share is in each iOS browser", () => {

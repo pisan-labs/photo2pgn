@@ -153,6 +153,7 @@ Tests never touch the network: the template modules take fakes, the CLI tests us
 | `src/lib/pgn.ts`, `export.ts` | PGN export; Lichess import, email, share sheet |
 | `src/lib/batch.ts` | Several sheets at once: one game each, two at a time, saved in My games |
 | `src/lib/library.ts` | My games: this device, plus the HintWise account when signed in |
+| `src/assets/logo.svg`, `public/icons/` | The logo (favicon inlined in `index.html` and `legal/*.html`, header, install page) and the app icons made from it |
 | `src/lib/image.ts`, `shared.ts`, `install.ts` | Photo shrinking, turning and cropping; photos shared in from the gallery; installing the app |
 | `public/sw.js`, `public/manifest.webmanifest` | Installable app: offline shell and the Android share target |
 | `src/lib/{supabase,auth,account,llm,signin-styles}.ts` | HintWise platform template: sign-in, account deletion, model calls |

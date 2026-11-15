@@ -104,6 +104,9 @@ test.describe("installed app", () => {
   test("the manifest makes it installable", async ({ page, request }) => {
     const manifest = await (await request.get("/manifest.webmanifest")).json();
     expect(manifest).toMatchObject({ display: "standalone", start_url: "/", share_target: { action: "/share-target", method: "POST" } });
+    expect(manifest.icons.map((i: { src: string }) => i.src).join(" ")).not.toContain("hintwise");
+    expect(manifest.icons.some((i: { purpose?: string }) => i.purpose === "maskable")).toBe(true);
+    expect(manifest.related_applications).toEqual([{ platform: "webapp", url: "https://photo2pgn.hintwise.org/manifest.webmanifest" }]);
     for (const icon of manifest.icons) expect((await request.get(icon.src)).ok()).toBe(true);
     await page.goto("/");
     await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
@@ -152,6 +155,39 @@ test.describe("the install link on Android", () => {
     await page.getByRole("button", { name: "Go to Photo to PGN" }).click();
     await expect(page).toHaveURL(/\/$/);
   });
+});
+
+test.describe("Android without the browser's Install button", () => {
+  test.use(phone("Pixel 7"));
+
+  test("the start page links to the steps", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".install-tip")).toContainText("install Photo to PGN");
+    await page.locator(".install-tip").getByRole("link", { name: "See how" }).click();
+    await expect(page).toHaveURL(/\/install$/);
+    await expect(page.locator(".install-steps")).toContainText("Install app");
+  });
+
+  test("already on the phone: the install page says so, and the start page offers nothing", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "getInstalledRelatedApps", {
+        value: async () => [{ platform: "webapp", url: "https://photo2pgn.hintwise.org/manifest.webmanifest" }],
+      });
+    });
+    await page.goto("/install");
+    await expect(page.getByRole("status")).toContainText("already on this phone");
+    await expect(page.locator(".install-steps")).toHaveCount(0);
+    await page.getByRole("button", { name: "Use it in the browser instead" }).click();
+    await expect(page.getByRole("button", { name: "Try the demo game instead" })).toBeVisible();
+    await expect(page.locator(".install-tip")).toHaveCount(0);
+  });
+});
+
+test("photo2pgn's own logo in the header", async ({ page }) => {
+  await page.goto("/");
+  const logo = page.locator("header img.mark");
+  await expect(logo).toBeVisible();
+  expect(await logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
 });
 
 test("the install link on a computer says to open it on the phone", async ({ page }) => {

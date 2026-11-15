@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { faviconSvg, logoSvg } from "./logo";
 
 const html = readFileSync("index.html", "utf8");
 
@@ -19,8 +20,9 @@ describe("HintWise footer", () => {
     expect(start).toBeGreaterThan(html.indexOf('<div id="root">'));
     expect(start).toBeLessThan(html.indexOf("</body>"));
   });
-  it("uses the HintWise favicon", () => {
-    expect(html).toMatch(/<link rel="icon" href="data:image\/svg\+xml,[^"]*%23312E81/);
+  it("uses photo2pgn's own logo as the favicon (owner, 15 Nov), not the HintWise one", () => {
+    expect(faviconSvg(html)).toBe(logoSvg());
+    expect(html).not.toContain("%23312E81");
   });
   it("has no printable scoresheet any more (owner, 12 Nov)", () => {
     expect(() => readFileSync("public/scoresheet.html")).toThrow();

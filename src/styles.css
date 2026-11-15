@@ -98,15 +98,10 @@ code {
 }
 
 .brand .mark {
-  display: grid;
-  place-items: center;
+  display: block;
+  flex: none;
   width: 40px;
   height: 40px;
-  border-radius: 9px;
-  background: var(--brand);
-  color: var(--brand-ink);
-  font-size: 26px;
-  font-family: serif;
 }
 
 .brand strong {
@@ -1634,7 +1629,6 @@ a.button {
 }
 
 .install-icon {
-  border-radius: 16px;
   margin: 4px auto 0;
   display: block;
 }
