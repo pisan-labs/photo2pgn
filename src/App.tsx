@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { UploadPanel } from "./components/UploadPanel";
+import { UploadPanel, type Sheet } from "./components/UploadPanel";
+import { BatchPanel, type BatchRun } from "./components/Batch";
+import { MAX_SHEETS, readBatch, type SheetState } from "./lib/batch";
 import { OUT_OF_CREDITS_STORAGE, displayName, outOfCreditsFrom, stillOut, type AccessOption, type OutOfCredits } from "./lib/access";
 import { checkAllowance, creditsOf, outMarkOf, type Allowance } from "./lib/allowance";
 import { ReviewPanel, type ReviewSession } from "./components/ReviewPanel";
@@ -8,7 +10,7 @@ import { fitPhotos, type PreparedImage } from "./lib/image";
 import { getByokKey, setByokKey } from "./lib/llm";
 import { currentToken, signOut } from "./lib/auth";
 import { ApiError, forgetJob } from "./lib/api";
-import { describeError, freeReaderFrom, readPhotos, type Phase } from "./lib/reading";
+import { describeError, freeReaderFrom, readPhotos, type Phase, type ReadPlan } from "./lib/reading";
 import { load, save } from "./lib/storage";
 import { Library, LocalRepository, type SavedGame } from "./lib/library";
 import { newId, SupabaseRepository } from "./lib/repository";
@@ -47,7 +49,10 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: "upload" });
   // photo2pgn.hintwise.org/pricing opens the packs.
   const [buying, setBuying] = useState(() => window.location.pathname === "/pricing");
-  const [pages, setPages] = useState<PreparedImage[]>([]);
+  // Each sheet is one game (one or two photos); several are read side by side.
+  const [sheets, setSheets] = useState<Sheet[]>([]);
+  const [batch, setBatch] = useState<BatchRun | null>(null);
+  const batchAbort = useRef<AbortController | null>(null);
   const [choice, setChoice] = useState<AccessOption>(() => (signInAvailable && !savedKey() ? "sign-in" : "own-key"));
   // Out of credits: remembered per person until the reset, when it lapses by itself.
   const [outMark, setOutMark] = useState<OutOfCredits | null>(() => load<OutOfCredits>(OUT_OF_CREDITS_STORAGE));
@@ -158,23 +163,72 @@ export default function App() {
     setView({ kind: "review" });
   }
 
-  function failed(err: unknown) {
-    setView({ kind: "upload" });
-    if (err instanceof ApiError && err.code === "cancelled") return;
+  /** Out of credits, or a key to switch: true when the notice above the choices says so. */
+  function noted(err: unknown): boolean {
     const mark = user ? outOfCreditsFrom(err, user.id) : null;
     if (mark) {
       // The notice above the choices says until when; only the own key is offered meanwhile.
       save(OUT_OF_CREDITS_STORAGE, mark);
       setOutMark(mark);
       setChoice("own-key");
-      return;
+      return true;
     }
-    const { message, ownKey } = describeError(err);
-    if (ownKey) setChoice("own-key");
-    setError(message);
+    if (describeError(err).ownKey) setChoice("own-key");
+    return false;
+  }
+
+  function failed(err: unknown) {
+    setView({ kind: "upload" });
+    if (err instanceof ApiError && err.code === "cancelled") return;
+    if (!noted(err)) setError(describeError(err).message);
+  }
+
+  function plan(onPhase?: (phase: Phase) => void): ReadPlan {
+    return {
+      mode: choice === "sign-in" ? "free" : "own-key",
+      apiKey: apiKey.trim(),
+      reader: FREE_READER,
+      getToken: signInAvailable ? () => currentToken() : async () => null,
+      onPhase,
+    };
+  }
+
+  /** Several sheets: read side by side in this page while the person does other things. */
+  async function readMany(list: Sheet[]) {
+    setError(null);
+    const ctrl = new AbortController();
+    batchAbort.current = ctrl;
+    const previews = list.map((s) => s.map((p) => p.previewUrl));
+    const mark = (i: number, state: SheetState) =>
+      setBatch((b) => b && { ...b, items: b.items.map((it, j) => (j === i ? { ...it, state } : it)) });
+    setBatch({ running: true, stopping: false, items: previews.map((p) => ({ previews: p, state: { kind: "waiting" } })) });
+    setSheets([]);
+    const how = plan();
+    await readBatch(list, {
+      photos: async (s) => (await fitPhotos(s)).map((p) => ({ mediaType: p.mediaType, data: p.data })),
+      read: (photos) => readPhotos(photos, how),
+      save: (g) => library.save(g).then(() => setSavedTick((t) => t + 1)),
+      newId,
+      signal: ctrl.signal,
+      onStop: (err) => void noted(err),
+      onState: (i, state) => {
+        if (state.kind === "ready") photosOf.current.set(state.game.id, previews[i]);
+        if (state.kind === "queued") {
+          const { job } = state;
+          photosOf.current.set(job.jobId, previews[i]);
+          const at = job.createdAt ?? new Date().toISOString();
+          readings.added({ id: job.jobId, status: "queued", createdAt: at, updatedAt: at, imageCount: previews[i].length });
+        }
+        mark(i, state);
+      },
+    });
+    setBatch((b) => b && { ...b, running: false });
+    setChecks((c) => c + 1); // credits were taken: ask the gateway again
   }
 
   async function convert() {
+    if (sheets.length > 1) return readMany(sheets);
+    const pages = sheets[0] ?? [];
     setError(null);
     const startedAt = Date.now();
     const ctrl = new AbortController();
@@ -185,15 +239,9 @@ export default function App() {
       const photos = await fitPhotos(pages);
       const outcome = await readPhotos(
         photos.map((p) => ({ mediaType: p.mediaType, data: p.data })),
-        {
-          mode: choice === "sign-in" ? "free" : "own-key",
-          apiKey: apiKey.trim(),
-          reader: FREE_READER,
-          getToken: signInAvailable ? () => currentToken() : async () => null,
-          onPhase: (phase) => {
-            if (!ctrl.signal.aborted) setView({ kind: "reading", startedAt, phase });
-          },
-        },
+        plan((phase) => {
+          if (!ctrl.signal.aborted) setView({ kind: "reading", startedAt, phase });
+        }),
       );
       const previews = photos.map((p) => p.previewUrl);
       if (outcome.kind === "read") {
@@ -212,7 +260,7 @@ export default function App() {
       if (handoff) handoffJob.current = job.jobId;
       const at = job.createdAt ?? new Date().toISOString();
       readings.added({ id: job.jobId, status: "queued", createdAt: at, updatedAt: at, imageCount: photos.length });
-      setPages([]);
+      setSheets([]);
       setView({ kind: "upload" });
     } catch (err) {
       if (!ctrl.signal.aborted) failed(err);
@@ -226,7 +274,7 @@ export default function App() {
 
   function startOver() {
     setSession(null);
-    setPages([]);
+    setSheets([]);
     setError(null);
     setView({ kind: "upload" });
   }
@@ -298,6 +346,17 @@ export default function App() {
                 }}
               />
             )}
+            {batch && (
+              <BatchPanel
+                run={batch}
+                onOpen={openGame}
+                onStop={() => {
+                  batchAbort.current?.abort();
+                  setBatch((b) => b && { ...b, stopping: true });
+                }}
+                onClose={() => setBatch(null)}
+              />
+            )}
             <ReadingsPanel
               state={readings.state}
               onOpen={(g) => {
@@ -327,9 +386,11 @@ export default function App() {
               </p>
             )}
             <UploadPanel
-              pages={pages}
-              setPages={setPages}
+              sheets={sheets}
+              setSheets={setSheets}
               maxPages={MAX_PAGES}
+              maxSheets={handoff ? 1 : MAX_SHEETS}
+              busy={Boolean(batch?.running)}
               signInAvailable={signInAvailable}
               signedIn={Boolean(user)}
               userEmail={user?.email ?? null}
@@ -363,7 +424,7 @@ export default function App() {
           <Reading
             startedAt={view.startedAt}
             phase={view.phase}
-            pages={pages}
+            pages={sheets[0] ?? []}
             onCancel={() => {
               abort.current?.abort();
               setView({ kind: "upload" });

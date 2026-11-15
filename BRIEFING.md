@@ -1,7 +1,7 @@
 # Briefing
 
 - Purpose: a web app that turns a photo of a handwritten chess tournament scoresheet into a downloadable PGN file. A HintWise app, deployed on Netlify.
-- Scope (2026-11-12): upload 1 to 2 photos; Claude (Opus 5.5, structured output, adaptive thinking, effort high) reads moves and header; a deterministic engine (chess.js + beam search) checks legality and proposes repairs; the person reviews and edits; PGN download or copy. A demo game runs the review with no API call.
+- Scope (2026-11-12): upload 1 to 2 photos per game (2026-11-15: up to 10 games at once, each sheet read on its own, two at a time, saved in My games as it arrives; `src/lib/batch.ts`); Claude (Opus 5.5, structured output, adaptive thinking, effort high) reads moves and header; a deterministic engine (chess.js + beam search) checks legality and proposes repairs; the person reviews and edits; PGN download or copy. A demo game runs the review with no API call.
 - Who pays (2026-11-12, owner, after the Plabs platform hand-off): free readings use the owner's key only through the HintWise LLM gateway, for signed-in users, within the gateway's caps (photo2pgn's own caps are set by the owner in the platform). A visitor's own key goes from the browser straight to api.anthropic.com. No Anthropic key on Netlify or in the app; no own rate limiter for the owner's key.
 - Key decisions:
   - The reading runs in the browser through the platform template's `ask()`. The gateway has no structured output or streaming, so Claude answers with one `record_scoresheet` tool call, checked with zod. Photos are shrunk to 1568 px and the request to under 1 MB.

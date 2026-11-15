@@ -113,3 +113,36 @@ test("a read game is kept in My games and opens again; the demo is not saved", a
   await expect(page.getByRole("heading", { name: "My games" })).toHaveCount(0);
 });
 
+
+test("several sheets at once: each is read as its own game and saved in My games", async ({ page }) => {
+  let calls = 0;
+  page.on("request", (r) => {
+    if (r.url().startsWith("https://api.anthropic.com/") && r.method() === "POST") calls++;
+  });
+  await fakeAnthropic(page, {});
+  await page.goto("/");
+  await page.getByLabel("API key", { exact: true }).fill("sk-ant-e2e-0123456789");
+  const sheet = "e2e/fixtures/scoresheet.png";
+  await page.setInputFiles("input[type=file][multiple]", [sheet, sheet, sheet]);
+  await expect(page.getByRole("heading", { name: /^Sheet \d$/ })).toHaveCount(3);
+
+  // The third photo is the second page of the second game.
+  await page.getByRole("listitem", { name: "Sheet 3" }).getByRole("button", { name: "Same game as sheet 2" }).click();
+  await expect(page.getByRole("heading", { name: /^Sheet \d$/ })).toHaveCount(2);
+  await expect(page.getByRole("img", { name: "Sheet 2, page 2" })).toBeVisible();
+  await page.getByRole("button", { name: "Read 2 scoresheets" }).click();
+
+  const batch = page.getByRole("region", { name: "Sheets being read" });
+  await expect(batch).toContainText("Done: 2 of 2 read");
+  await expect(batch).toContainText("(2 pages)");
+  expect(calls).toBe(2);
+  await expect(page.getByRole("heading", { name: "My games" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Morphy, Paul vs Duke Karl/ })).toHaveCount(2);
+
+  await batch.getByRole("button", { name: /^Open sheet 2/ }).click();
+  await expect(page.getByRole("heading", { name: /Check the moves/ })).toBeVisible();
+  await expect(page.locator(".pgn textarea")).toHaveValue(/17\. Rd8# 1-0/);
+  await page.getByRole("button", { name: "Start over" }).click();
+  await batch.getByRole("button", { name: "Close" }).click();
+  await expect(batch).toHaveCount(0);
+});

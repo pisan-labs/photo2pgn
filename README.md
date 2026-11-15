@@ -11,6 +11,8 @@ For players, coaches, arbiters and club volunteers who have a pile of paper scor
 5. Download the `.pgn` file, copy it, email or share it, or open it in Lichess (one click) or Chess.com.
 6. Every game is kept in **My games**, on this device, and in your HintWise account when you are signed in, so a sheet photographed on a phone can be finished on a computer.
 
+**Several games at once:** choose up to 10 photos together and each is read as its own game, two at a time, while the page stays usable; each game is saved in My games as it arrives, with an Open button. A game on two pages: "Add page 2" on its sheet, or "Same game as sheet N" to join a photo to the one above. Each sheet costs one credit; running out, or a rejected key, stops the sheets not yet started. A Chess TD hand-off still reads one game.
+
 The demo button runs the whole review on a sample game with no account and no key.
 
 **On a phone** it works like a native mobile app: add it to the home screen (the "install Photo to PGN" tip on Android, Share > Add to Home Screen on iPhone). On Android, a photo in the gallery can be shared straight into it.
@@ -149,6 +151,7 @@ Tests never touch the network: the template modules take fakes, the CLI tests us
 | `src/lib/read.ts`, `reading.ts`, `access.ts` | The reading: own key, gateway, or the queue with fallback; error messages; which ways in to offer, and out of credits |
 | `src/lib/notation.ts`, `repair.ts` | Cleaning handwritten moves; the search that repairs misreadings |
 | `src/lib/pgn.ts`, `export.ts` | PGN export; Lichess import, email, share sheet |
+| `src/lib/batch.ts` | Several sheets at once: one game each, two at a time, saved in My games |
 | `src/lib/library.ts` | My games: this device, plus the HintWise account when signed in |
 | `src/lib/image.ts`, `shared.ts`, `install.ts` | Photo shrinking, turning and cropping; photos shared in from the gallery; installing the app |
 | `public/sw.js`, `public/manifest.webmanifest` | Installable app: offline shell and the Android share target |
