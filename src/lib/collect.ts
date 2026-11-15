@@ -53,6 +53,12 @@ export interface CollectDeps {
 
 const NO_MOVES = "No moves were found: this does not look like a chess scoresheet, or the photo is too unclear.";
 
+/** Why a reading gives no game, or null when it has moves. */
+export function noMovesMessage(ex: Extraction | undefined): string | null {
+  if (ex && ex.isScoresheet && ex.rows.length > 0) return null;
+  return ex?.notes ? `${NO_MOVES} Claude noted: ${ex.notes}` : NO_MOVES;
+}
+
 export async function collectReadings(deps: CollectDeps): Promise<Collected> {
   const list = deps.list ?? listMyJobs;
   const forget = deps.forget ?? forgetJob;
@@ -69,8 +75,9 @@ export async function collectReadings(deps: CollectDeps): Promise<Collected> {
       continue;
     }
     const ex = job.result;
-    if (!ex || !ex.isScoresheet || ex.rows.length === 0) {
-      out.failed.push({ id: job.id, createdAt: job.createdAt, message: ex?.notes ? `${NO_MOVES} Claude noted: ${ex.notes}` : NO_MOVES });
+    const none = noMovesMessage(ex);
+    if (!ex || none) {
+      out.failed.push({ id: job.id, createdAt: job.createdAt, message: none ?? NO_MOVES });
       continue;
     }
     if (!(await deps.has?.(job.id))) {
