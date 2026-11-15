@@ -471,6 +471,9 @@ export default function App() {
 
       <footer className="foot">
         <p>HintWise uses your photos only to read the game and does not keep them afterwards. Your games stay on this device, and in your account when you sign in.</p>
+        <p className="legal-links">
+          <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a>
+        </p>
         <p className="credits">
           Chess pieces by Cburnett, <a href="/piece-images-license.txt">BSD licence</a>.
         </p>

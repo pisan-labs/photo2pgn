@@ -30,6 +30,22 @@
   to = "/index.html"
   status = 200
 
+# The terms, refund and privacy pages (public/*.html) at short addresses too.
+[[redirects]]
+  from = "/terms"
+  to = "/terms.html"
+  status = 200
+
+[[redirects]]
+  from = "/refunds"
+  to = "/refunds.html"
+  status = 200
+
+[[redirects]]
+  from = "/privacy"
+  to = "/privacy.html"
+  status = 200
+
 # One address for the app: the netlify.app name sends people to hintwise.org.
 [[redirects]]
   from = "https://photo2pgn.netlify.app/*"
