@@ -99,3 +99,5 @@
 2026-11-15 [code] Paddle webhook records transaction.completed (signature on raw body, one record per transaction, pack from price id); owner still grants credits by hand; list at /api/worker/payments
 
 2026-11-15 [code] /install page: one Install button where the browser offers it, else per-browser steps (iPhone Share > Add to Home Screen, Android menu, desktop: open on the phone)
+
+2026-11-15 [code] Android share target takes up to 10 photos (was 2), each its own sheet; shared photos keep their order past 10 (numeric sort)
