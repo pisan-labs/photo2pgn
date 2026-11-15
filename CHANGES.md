@@ -111,3 +111,9 @@
 2026-11-15 [code] Legal pages moved to public/, short addresses in netlify.toml, footer links; service worker keeps only app pages as the offline page
 
 2026-11-15 [decision] Owner: prices public at /pricing before Paddle is connected (Paddle's website check); footer links Pricing, Terms, Refunds, Privacy
+
+2026-11-15 [note] Paddle live pre-flight: Netlify had no VITE_PADDLE_*; PGN_PADDLE_PRICE_PACK_* were 500/1000, not pri_ ids; production webhook secret = the .env _WEBHOOK one
+
+2026-11-15 [decision] Owner: live test through the paddle-live MCP; PGN_PADDLE_ENV and PGN_PADDLE_API_KEY (the sandbox key, unused) off Netlify, kept commented in local .env
+
+2026-11-15 [code] Checkout: the client token prefix picks live or sandbox (live_/test_), VITE_PADDLE_ENV optional; a mismatch or a non-pri_ price sells nothing, admins see why

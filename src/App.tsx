@@ -19,7 +19,7 @@ import { LibraryPanel } from "./components/LibraryPanel";
 import { AdminCredits } from "./components/AdminCredits";
 import { ReadingsPanel, useReadings } from "./components/Readings";
 import { BuyCredits } from "./components/BuyCredits";
-import { checkoutConfigFrom } from "./lib/checkout";
+import { checkoutSetupFrom } from "./lib/checkout";
 import { takeSharedPhotos } from "./lib/shared";
 import { installWay, isStandalone, useInstall } from "./lib/install";
 import { InstallPanel } from "./components/InstallPanel";
@@ -32,8 +32,8 @@ import { applyHints } from "./lib/handoff";
 const LIBRARY_STORAGE = "photo2pgn.games";
 const MAX_PAGES = 2;
 const FREE_READER = freeReaderFrom();
-// Credits are for sale once the build has Paddle settings; until then admins see a preview.
-const CHECKOUT = checkoutConfigFrom();
+// Credits are for sale once the build has Paddle settings; until then admins see a preview and why.
+const { config: CHECKOUT, problem: CHECKOUT_PROBLEM } = checkoutSetupFrom();
 
 type View = { kind: "upload" } | { kind: "reading"; startedAt: number; phase: Phase } | { kind: "review" };
 
@@ -349,6 +349,7 @@ export default function App() {
             {buying && (
               <BuyCredits
                 config={CHECKOUT}
+                problem={CHECKOUT_PROBLEM}
                 admin={Boolean(credits?.admin)}
                 buyer={user ? { userId: user.id, email: user.email ?? null } : null}
                 onSignIn={() => setSignInOpen(true)}

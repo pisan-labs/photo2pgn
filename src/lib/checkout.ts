@@ -1,7 +1,9 @@
 // Buying credits through Paddle (HintWise is the seller, Paddle the Merchant
-// of Record). Pending: the owner's Paddle account. Until the build has a
-// client token and a price for every pack (VITE_PADDLE_*), nothing is for
-// sale: checkoutConfigFrom() is null and only admins see a preview.
+// of Record). Until the build has a client token and a price for every pack
+// (VITE_PADDLE_*), nothing is for sale: checkoutConfigFrom() is null and only
+// admins see a preview, with the reason. The token's prefix decides live or
+// sandbox (owner, 15 Nov), so the two cannot disagree; VITE_PADDLE_ENV is
+// optional, and if it says otherwise nothing is for sale.
 //
 // The credits: for now the owner adds them by hand (Admin: add credits)
 // when Paddle reports a payment (owner, 13 Nov). The transaction's
@@ -20,17 +22,34 @@ export interface CheckoutConfig {
 /** The build variable holding a pack's Paddle price id: pack-20 -> VITE_PADDLE_PRICE_PACK_20. */
 export const priceVar = (p: CreditPack) => `VITE_PADDLE_PRICE_${p.id.replace(/-/g, "_").toUpperCase()}`;
 
-export function checkoutConfigFrom(env: Record<string, unknown> = import.meta.env): CheckoutConfig | null {
-  const token = typeof env.VITE_PADDLE_CLIENT_TOKEN === "string" ? env.VITE_PADDLE_CLIENT_TOKEN.trim() : "";
-  if (!token) return null;
+/** Paddle's client-side tokens say whose they are: live_… the live account, test_… the sandbox. */
+export function environmentOf(token: string): CheckoutConfig["environment"] | null {
+  return token.startsWith("live_") ? "production" : token.startsWith("test_") ? "sandbox" : null;
+}
+
+export type CheckoutSetup = { config: CheckoutConfig; problem: null } | { config: null; problem: string };
+
+/** The build's Paddle settings, or why nothing is for sale. */
+export function checkoutSetupFrom(env: Record<string, unknown> = import.meta.env): CheckoutSetup {
+  const str = (k: string) => (typeof env[k] === "string" ? (env[k] as string).trim() : "");
+  const off = (problem: string): CheckoutSetup => ({ config: null, problem });
+  const token = str("VITE_PADDLE_CLIENT_TOKEN");
+  if (!token) return off("no VITE_PADDLE_CLIENT_TOKEN");
+  const environment = environmentOf(token);
+  if (!environment) return off("VITE_PADDLE_CLIENT_TOKEN starts with neither live_ nor test_");
+  const stated = str("VITE_PADDLE_ENV");
+  if (stated && stated !== environment) return off(`VITE_PADDLE_ENV is ${stated}, but the client token is for ${environment}`);
   const prices: Record<string, string> = {};
   for (const p of CREDIT_PACKS) {
-    const v = env[priceVar(p)];
-    if (typeof v !== "string" || !v.trim()) return null; // every pack, or none
-    prices[p.id] = v.trim();
+    const v = str(priceVar(p)); // every pack, or none
+    if (!v) return off(`no ${priceVar(p)}`);
+    if (!v.startsWith("pri_")) return off(`${priceVar(p)} is not a Paddle price id (pri_…)`);
+    prices[p.id] = v;
   }
-  return { token, environment: env.VITE_PADDLE_ENV === "production" ? "production" : "sandbox", prices };
+  return { config: { token, environment, prices }, problem: null };
 }
+
+export const checkoutConfigFrom = (env: Record<string, unknown> = import.meta.env): CheckoutConfig | null => checkoutSetupFrom(env).config;
 
 /** "25¢ a credit" */
 export function perCredit(p: CreditPack): string {
@@ -91,7 +110,7 @@ export async function openCheckout(
     if (name === "checkout.completed" || name === "checkout.closed") deps.onEvent?.(name);
   };
   if (initialised !== paddle) {
-    paddle.Environment.set(config.environment);
+    if (config.environment === "sandbox") paddle.Environment.set("sandbox"); // live is Paddle.js's default
     paddle.Initialize({ token: config.token, eventCallback: (e) => listener?.(e.name ?? "") });
     initialised = paddle;
   }
