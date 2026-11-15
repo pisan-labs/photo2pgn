@@ -158,3 +158,19 @@ test("the terms, refund and privacy pages are published and linked from the foot
     await page.goto("/");
   }
 });
+
+test("the prices are public at /pricing, with buying not open yet", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("footer.foot").getByRole("link", { name: "Pricing" }).click();
+  await expect(page).toHaveURL(/\/pricing$/);
+  const buy = page.getByRole("region", { name: "Buy credits" });
+  await expect(buy).toContainText("20 credits for US$5");
+  await expect(buy).toContainText("50 credits for US$10");
+  await expect(buy).toContainText("Buying opens soon");
+  await expect(buy.getByRole("button", { name: "Coming soon" })).toHaveCount(2);
+  for (const b of await buy.getByRole("button", { name: "Coming soon" }).all()) await expect(b).toBeDisabled();
+  await expect(buy.getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+  await buy.getByRole("button", { name: "Close" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(buy).toHaveCount(0);
+});

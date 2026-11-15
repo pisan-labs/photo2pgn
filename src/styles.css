@@ -398,6 +398,11 @@ label.inline {
   color: var(--muted);
 }
 
+.packs button {
+  flex: none;
+  white-space: nowrap;
+}
+
 .choice .buy-more {
   justify-self: start;
   margin-top: 4px;

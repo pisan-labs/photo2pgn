@@ -345,9 +345,11 @@ export default function App() {
         )}
         {view.kind === "upload" && !installing && (
           <>
-            {buying && canBuy && (
+            {/* Everyone at /pricing; from the start page's links once credits can be bought (or for admins). */}
+            {buying && (
               <BuyCredits
                 config={CHECKOUT}
+                admin={Boolean(credits?.admin)}
                 buyer={user ? { userId: user.id, email: user.email ?? null } : null}
                 onSignIn={() => setSignInOpen(true)}
                 onClose={() => {
@@ -472,7 +474,7 @@ export default function App() {
       <footer className="foot">
         <p>HintWise uses your photos only to read the game and does not keep them afterwards. Your games stay on this device, and in your account when you sign in.</p>
         <p className="legal-links">
-          <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a>
+          <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a>
         </p>
         <p className="credits">
           Chess pieces by Cburnett, <a href="/piece-images-license.txt">BSD licence</a>.
