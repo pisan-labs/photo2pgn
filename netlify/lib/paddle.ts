@@ -1,7 +1,8 @@
 // Paddle's webhook, as a record of what was bought. Nothing here grants
 // credits: the owner adds them by hand with the HintWise `credits-grant`
 // function (owner, 13 Nov), and GET /api/worker/payments lists what is still
-// owed. The signature is checked on the raw body before anything else.
+// owed. Only Paddle's addresses (its /ips list) get in; the signature is
+// checked on the raw body before anything else is read.
 import type { KV } from "./kv";
 import { CREDIT_PACKS } from "../../src/lib/credits";
 
@@ -58,6 +59,55 @@ export interface PaddleDeps {
   now?: () => Date;
 }
 
+/** Paddle's live list of the addresses it sends webhooks from: the source of truth, and it can change. */
+export const PADDLE_IPS_URL = "https://api.paddle.com/ips";
+
+/** Paddle's webhook addresses (`data.ipv4_cidrs`), kept for an hour; a stale list beats none, and none is null. */
+export function paddleIps(fetcher: typeof fetch = fetch, ttlMs = 3_600_000): (nowMs?: number) => Promise<string[] | null> {
+  let cache: { cidrs: string[]; at: number } | null = null;
+  return async (nowMs = Date.now()) => {
+    if (cache && nowMs - cache.at < ttlMs) return cache.cidrs;
+    try {
+      const res = await fetcher(PADDLE_IPS_URL);
+      if (!res.ok) throw new Error(`ips ${res.status}`);
+      const cidrs = ((await res.json()) as { data?: { ipv4_cidrs?: unknown } }).data?.ipv4_cidrs;
+      if (!Array.isArray(cidrs) || !cidrs.length || !cidrs.every((c) => typeof c === "string")) throw new Error("ips shape");
+      cache = { cidrs, at: nowMs };
+      return cidrs;
+    } catch {
+      return cache?.cidrs ?? null;
+    }
+  };
+}
+
+const ipv4 = (s: string): number | null => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (!m) return null;
+  const [a, b, c, d] = m.slice(1).map(Number);
+  return [a, b, c, d].some((x) => x > 255) ? null : ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
+};
+
+/** Whether an IPv4 address (or an IPv4-mapped IPv6 one) is in one of the CIDR blocks. */
+export function inCidrs(ip: string, cidrs: string[]): boolean {
+  const addr = ipv4(ip.replace(/^::ffff:/i, ""));
+  if (addr === null) return false;
+  return cidrs.some((cidr) => {
+    const [base, bitsText = "32"] = cidr.split("/");
+    const net = ipv4(base);
+    const bits = Number(bitsText);
+    if (net === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+    const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+    return ((addr & mask) >>> 0) === ((net & mask) >>> 0);
+  });
+}
+
+export interface WebhookDeps extends PaddleDeps {
+  /** The sender's address (Netlify's context.ip). */
+  clientIp: string | null;
+  /** Paddle's current webhook addresses (paddleIps()), null when they cannot be had. */
+  allowedIps: () => Promise<string[] | null>;
+}
+
 const reply = (status: number, body: object) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -71,9 +121,14 @@ interface TxnData {
 }
 
 /** POST /api/paddle-webhook */
-export async function handlePaddleWebhook(req: Request, deps: PaddleDeps): Promise<Response> {
+export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Promise<Response> {
   const { config } = deps;
   if (!config.webhookSecret) return reply(503, { error: "off" });
+  // Only Paddle's servers (owner, 15 Nov, from Paddle's go-live steps). Without the list,
+  // a 503: Paddle retries. Another sender gets a 403 before anything else is read.
+  const cidrs = await deps.allowedIps();
+  if (!cidrs) return reply(503, { error: "ips" });
+  if (!deps.clientIp || !inCidrs(deps.clientIp, cidrs)) return reply(403, { error: "ip" });
   const raw = await req.text(); // the raw body: a parsed and re-written one would not verify
   const now = deps.now?.() ?? new Date();
   if (!(await validSignature(raw, req.headers.get("paddle-signature"), config.webhookSecret, Math.floor(now.getTime() / 1000)))) {

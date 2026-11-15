@@ -19,7 +19,7 @@ import { LibraryPanel } from "./components/LibraryPanel";
 import { AdminCredits } from "./components/AdminCredits";
 import { ReadingsPanel, useReadings } from "./components/Readings";
 import { BuyCredits } from "./components/BuyCredits";
-import { checkoutConfigFrom } from "./lib/checkout";
+import { checkoutSetupFrom } from "./lib/checkout";
 import { takeSharedPhotos } from "./lib/shared";
 import { installWay, isStandalone, useInstall } from "./lib/install";
 import { InstallPanel } from "./components/InstallPanel";
@@ -32,8 +32,8 @@ import { applyHints } from "./lib/handoff";
 const LIBRARY_STORAGE = "photo2pgn.games";
 const MAX_PAGES = 2;
 const FREE_READER = freeReaderFrom();
-// Credits are for sale once the build has Paddle settings; until then admins see a preview.
-const CHECKOUT = checkoutConfigFrom();
+// Credits are for sale once the build has Paddle settings; until then admins see a preview and why.
+const { config: CHECKOUT, problem: CHECKOUT_PROBLEM } = checkoutSetupFrom();
 
 type View = { kind: "upload" } | { kind: "reading"; startedAt: number; phase: Phase } | { kind: "review" };
 
@@ -78,7 +78,9 @@ export default function App() {
   }, [user, signInAvailable, onStart, checks]);
   const checked = user && allowance ? allowance : null;
   const credits = checked ? creditsOf(checked) : null;
-  const canBuy = Boolean(CHECKOUT) || Boolean(credits?.admin);
+  // Until sales open (VITE_PADDLE_OPEN=yes) only admins can buy; everyone else sees "Coming soon".
+  const checkout = CHECKOUT && (CHECKOUT.open || credits?.admin) ? CHECKOUT : null;
+  const canBuy = Boolean(checkout) || Boolean(credits?.admin);
   const out = checked && user ? outMarkOf(checked, user.id) : stillOut(outMark, user?.id ?? null);
   useEffect(() => {
     if (!out) return;
@@ -348,7 +350,8 @@ export default function App() {
             {/* Everyone at /pricing; from the start page's links once credits can be bought (or for admins). */}
             {buying && (
               <BuyCredits
-                config={CHECKOUT}
+                config={checkout}
+                problem={CHECKOUT_PROBLEM}
                 admin={Boolean(credits?.admin)}
                 buyer={user ? { userId: user.id, email: user.email ?? null } : null}
                 onSignIn={() => setSignInOpen(true)}
@@ -474,7 +477,8 @@ export default function App() {
       <footer className="foot">
         <p>HintWise uses your photos only to read the game and does not keep them afterwards. Your games stay on this device, and in your account when you sign in.</p>
         <p className="legal-links">
-          <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a>
+          <a href="/pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a> ·{" "}
+          <a href="mailto:builder@hintwise.org?subject=Photo%20to%20PGN">Contact</a>
         </p>
         <p className="credits">
           Chess pieces by Cburnett, <a href="/piece-images-license.txt">BSD licence</a>.

@@ -111,3 +111,17 @@
 2026-11-15 [code] Legal pages moved to public/, short addresses in netlify.toml, footer links; service worker keeps only app pages as the offline page
 
 2026-11-15 [decision] Owner: prices public at /pricing before Paddle is connected (Paddle's website check); footer links Pricing, Terms, Refunds, Privacy
+
+2026-11-15 [note] Paddle live pre-flight: Netlify had no VITE_PADDLE_*; PGN_PADDLE_PRICE_PACK_* were 500/1000, not pri_ ids; production webhook secret = the .env _WEBHOOK one
+
+2026-11-15 [decision] Owner: live test through the paddle-live MCP; PGN_PADDLE_ENV and PGN_PADDLE_API_KEY (the sandbox key, unused) off Netlify, kept commented in local .env
+
+2026-11-15 [code] Checkout: the client token prefix picks live or sandbox (live_/test_), VITE_PADDLE_ENV optional; a mismatch or a non-pri_ price sells nothing, admins see why
+
+2026-11-15 [code] Paddle webhook: only Paddle's addresses (api.paddle.com/ips, kept an hour, never hard-coded), else 403; 503 when the list cannot be had; .env.example lists the Paddle settings
+
+2026-11-15 [note] Readiness for Paddle verification: terms/refunds/privacy live (200, own titles), description present; contact only as the footer's project-idea email; catalog check pending paddle-live
+
+2026-11-15 [decision] Owner (no answer, recommendation taken): with live Paddle settings only admins can buy until VITE_PADDLE_OPEN=yes, so the live test runs on the real domain before sales open
+
+2026-11-15 [decision] Owner (no answer, recommendation taken): Contact link (builder@hintwise.org) in the app footer for Paddle verification; Retain pwCustomer skipped (no subscriptions)

@@ -9,6 +9,7 @@ type State = { kind: "idle" } | { kind: "opening"; pack: string } | { kind: "pai
 
 export function BuyCredits({
   config,
+  problem = null,
   buyer,
   onSignIn,
   onClose,
@@ -16,6 +17,8 @@ export function BuyCredits({
   admin = false,
 }: {
   config: CheckoutConfig | null;
+  /** Why config is null (checkoutSetupFrom), shown to admins. */
+  problem?: string | null;
   /** An admin sees why nothing can be bought yet. */
   admin?: boolean;
   /** Signed in: who pays. Signed out: buying needs an account. */
@@ -55,10 +58,13 @@ export function BuyCredits({
           Close
         </button>
       </div>
+      {config && !config.open && admin && (
+        <p className="notice">Admins only: sales are not open yet (VITE_PADDLE_OPEN=yes opens them), so only admins can buy. Everyone else sees Coming soon.</p>
+      )}
       {!config && (
         <p className="notice">
           {admin
-            ? "Admins: Paddle is not connected yet (the VITE_PADDLE_* build settings), so the buttons are off. Everyone sees these prices at /pricing."
+            ? `Admins: Paddle is not connected (${problem ?? "the VITE_PADDLE_* build settings"}), so the buttons are off. Everyone sees these prices at /pricing.`
             : "Buying opens soon. Until then, use your free credits or your own Anthropic API key."}
         </p>
       )}
