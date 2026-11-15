@@ -101,3 +101,7 @@
 2026-11-15 [code] /install page: one Install button where the browser offers it, else per-browser steps (iPhone Share > Add to Home Screen, Android menu, desktop: open on the phone)
 
 2026-11-15 [code] Android share target takes up to 10 photos (was 2), each its own sheet; shared photos keep their order past 10 (numeric sort)
+
+2026-11-15 [decision] Owner: photo2pgn gets its own logo instead of the HintWise icon (favicon, header, app icons); the HintWise footer stays byte for byte
+
+2026-11-15 [code] Logo: knight in viewfinder corners (src/assets/logo.svg), icons 192/512/maskable/apple-touch; install: "See how" tip on Android without the button, "already on this phone" via getInstalledRelatedApps

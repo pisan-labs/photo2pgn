@@ -3,6 +3,7 @@
 // and iPhones not at all, so this is as close to one tap as the web allows.
 import { useState } from "react";
 import { iosShareHint, type InstallWay } from "../lib/install";
+import logoUrl from "../assets/logo.svg";
 
 export function InstallPanel({
   way,
@@ -23,7 +24,7 @@ export function InstallPanel({
   const [copied, setCopied] = useState(false);
   // The browser's dialog opens once per page: after the tap, the menu is the way left.
   const [asked, setAsked] = useState(false);
-  const done = way === "installed" || installed;
+  const done = way === "installed" || way === "on-phone" || installed;
   const copy = () => {
     void navigator.clipboard
       ?.writeText(link)
@@ -38,7 +39,7 @@ export function InstallPanel({
 
   return (
     <section className="panel install" aria-labelledby="install-title">
-      <img className="install-icon" src="/icons/hintwise-icon-192.png" alt="" width="72" height="72" />
+      <img className="install-icon" src={logoUrl} alt="" width="72" height="72" />
       <h2 id="install-title">Install Photo to PGN</h2>
       <p className="lede">
         Put it on your home screen: it opens full screen like an app
@@ -47,7 +48,11 @@ export function InstallPanel({
 
       {done && (
         <p className="ok-note" role="status">
-          {installed ? "Installed. Photo to PGN is on your home screen." : "Photo to PGN is installed: you are using it now."}
+          {installed
+            ? "Installed. Photo to PGN is on your home screen."
+            : way === "on-phone"
+              ? "Photo to PGN is already on this phone: open it from your home screen or app list."
+              : "Photo to PGN is installed: you are using it now."}
         </p>
       )}
 
@@ -112,7 +117,7 @@ export function InstallPanel({
 
       <p>
         <button type="button" className="link" onClick={onContinue}>
-          {done ? "Go to Photo to PGN" : "Use it in the browser instead"}
+          {way === "installed" || installed ? "Go to Photo to PGN" : "Use it in the browser instead"}
         </button>
       </p>
     </section>

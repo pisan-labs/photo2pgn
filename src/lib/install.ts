@@ -20,15 +20,28 @@ export function isIos(ua: string = typeof navigator === "undefined" ? "" : navig
 /**
  * How this browser installs the app, for the /install page:
  * - installed: already opened from the home screen;
+ * - on-phone: installed on this phone, but opened in the browser (Android Chrome tells);
  * - prompt: the browser offers its install dialog (Android, desktop Chrome and Edge);
  * - ios: Share > Add to Home Screen (Safari, and Chrome, Edge or Firefox on iOS 16.4 and later);
  * - android-menu: Android without the dialog (Firefox, Samsung Internet, or not offered yet): the browser's menu;
  * - desktop: a computer: open the page on the phone.
  */
-export type InstallWay = "installed" | "prompt" | "ios" | "android-menu" | "desktop";
+export type InstallWay = "installed" | "on-phone" | "prompt" | "ios" | "android-menu" | "desktop";
 
-export function installWay({ standalone, canPrompt, ua }: { standalone: boolean; canPrompt: boolean; ua: string }): InstallWay {
+export function installWay({
+  standalone,
+  canPrompt,
+  ua,
+  appInstalled = false,
+}: {
+  standalone: boolean;
+  canPrompt: boolean;
+  ua: string;
+  /** getInstalledRelatedApps found the app on this device. */
+  appInstalled?: boolean;
+}): InstallWay {
   if (standalone) return "installed";
+  if (appInstalled) return "on-phone";
   if (canPrompt) return "prompt";
   // iPadOS asks for the desktop site: a "Macintosh" with a touch screen.
   if (isIos(ua) || (/Macintosh/.test(ua) && typeof navigator !== "undefined" && navigator.maxTouchPoints > 1)) return "ios";
@@ -43,9 +56,43 @@ export function iosShareHint(ua: string): string {
   return "the Share button (a square with an arrow) at the bottom of the screen, or at the top on iPad";
 }
 
-export function useInstall(): { canInstall: boolean; install: () => void; iosTip: boolean; installed: boolean } {
+/**
+ * Whether the app is installed on this device, asked from the browser tab:
+ * Chrome on Android answers through getInstalledRelatedApps (the manifest's
+ * related_applications names the app itself); other browsers cannot tell.
+ */
+export async function isAppInstalled(nav: Navigator | undefined = typeof navigator === "undefined" ? undefined : navigator): Promise<boolean> {
+  const ask = (nav as (Navigator & { getInstalledRelatedApps?: () => Promise<unknown[]> }) | undefined)?.getInstalledRelatedApps;
+  if (!nav || typeof ask !== "function") return false;
+  try {
+    return (await ask.call(nav)).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function useInstall(): {
+  canInstall: boolean;
+  install: () => void;
+  iosTip: boolean;
+  installed: boolean;
+  /** Already on this device, though this page is open in the browser. */
+  appInstalled: boolean;
+} {
   const [prompt, setPrompt] = useState<InstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
+  const [appInstalled, setAppInstalled] = useState(false);
+  useEffect(() => {
+    let live = true;
+    if (!isStandalone()) {
+      void isAppInstalled().then((yes) => {
+        if (live) setAppInstalled(yes);
+      });
+    }
+    return () => {
+      live = false;
+    };
+  }, []);
   useEffect(() => {
     const onPrompt = (e: Event) => {
       e.preventDefault();
@@ -70,5 +117,6 @@ export function useInstall(): { canInstall: boolean; install: () => void; iosTip
     },
     iosTip: isIos() && !isStandalone(),
     installed,
+    appInstalled,
   };
 }

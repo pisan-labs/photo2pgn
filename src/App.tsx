@@ -23,6 +23,7 @@ import { checkoutConfigFrom } from "./lib/checkout";
 import { takeSharedPhotos } from "./lib/shared";
 import { installWay, isStandalone, useInstall } from "./lib/install";
 import { InstallPanel } from "./components/InstallPanel";
+import logoUrl from "./assets/logo.svg";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
 import type { Extraction, GameHeaders } from "./lib/schema";
 import { HandoffBanner, useHandoff } from "./components/Handoff";
@@ -111,7 +112,9 @@ export default function App() {
   );
   const abort = useRef<AbortController | null>(null);
   const [incoming, setIncoming] = useState<File[] | undefined>(undefined);
-  const { canInstall, install, iosTip, installed } = useInstall();
+  const { canInstall, install, installed, appInstalled } = useInstall();
+  // How this browser installs the app: the start page's tip and the /install page.
+  const way = installWay({ standalone: isStandalone(), canPrompt: canInstall, ua: navigator.userAgent, appInstalled });
   // Opened from Chess TD to read one game and send it back.
   const { handoff, end: endHandoff } = useHandoff();
   const [sentToChessTd, setSentToChessTd] = useState(false);
@@ -286,9 +289,7 @@ export default function App() {
     <div className={`app${view.kind === "review" ? "" : " narrow"}`}>
       <header className="top">
         <a className="brand" href="/" aria-label="Photo to PGN home">
-          <span className="mark" aria-hidden="true">
-            ♞
-          </span>
+          <img className="mark" src={logoUrl} alt="" width="40" height="40" />
           <span>
             <strong>Photo to PGN</strong>
             <small>Scoresheet photos to PGN files</small>
@@ -333,7 +334,7 @@ export default function App() {
         )}
         {view.kind === "upload" && installing && (
           <InstallPanel
-            way={installWay({ standalone: isStandalone(), canPrompt: canInstall, ua: navigator.userAgent })}
+            way={way}
             installed={installed}
             onInstall={install}
             onContinue={() => {
@@ -385,7 +386,7 @@ export default function App() {
               Take a photo of a handwritten tournament scoresheet. Claude reads the moves, a chess engine checks each one
               is legal, you fix anything doubtful, and you download a PGN file.
             </p>
-            {canInstall && (
+            {way === "prompt" && (
               <p className="install-tip">
                 Tip:{" "}
                 <button type="button" className="link" onClick={install}>
@@ -394,9 +395,16 @@ export default function App() {
                 to open it like a native mobile app.
               </p>
             )}
-            {iosTip && (
+            {way === "ios" && (
               <p className="install-tip">
-                Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like a native mobile app.
+                Tip: tap Share, then <strong>Add to Home Screen</strong>, to open Photo to PGN like a native mobile app.{" "}
+                <a href="/install">See how</a>
+              </p>
+            )}
+            {/* Android without the browser's Install button (Samsung Internet, Firefox, or not offered): the steps. */}
+            {way === "android-menu" && (
+              <p className="install-tip">
+                Tip: install Photo to PGN to open it like a native mobile app. <a href="/install">See how</a>
               </p>
             )}
             <UploadPanel
