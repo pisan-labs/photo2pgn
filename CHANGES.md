@@ -125,3 +125,13 @@
 2026-11-15 [decision] Owner (no answer, recommendation taken): with live Paddle settings only admins can buy until VITE_PADDLE_OPEN=yes, so the live test runs on the real domain before sales open
 
 2026-11-15 [decision] Owner (no answer, recommendation taken): Contact link (builder@hintwise.org) in the app footer for Paddle verification; Retain pwCustomer skipped (no subscriptions)
+
+2026-11-15 [note] Paddle live: catalog copied from sandbox (product, pack-20/50 prices), live_ client token, Bancontact off (card, PayPal, Apple Pay); Netlify has the live ids
+
+2026-11-15 [note] Production webhook secret was not the live destination's (local value matched neither account); now the live endpoint_secret_key on Netlify production and in local .env
+
+2026-11-15 [decision] Owner: live default payment link https://photo2pgn.hintwise.org/pricing; without one Paddle.js fails with transaction_default_checkout_url_not_set
+
+2026-11-15 [note] Live $0 test passed: txn_01m7g0dhqzapvptp466wdykzkr completed, webhook 200 first try, payment record right, granted; test discount archived
+
+2026-11-15 [decision] Owner: sales open, VITE_PADDLE_OPEN=yes on Netlify (production builds only); HANDOFF.md retired

@@ -52,7 +52,19 @@ Done
   - Bancontact off; live payment methods now apple_pay, card, paypal.
 - [x] Netlify: created `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_PRICE_PACK_20`, `VITE_PADDLE_PRICE_PACK_50` (builds scope, all contexts); `PGN_PADDLE_PRICE_PACK_20/_50` now the live `pri_` ids (`setEnvVarValue` on context `all` failed, `updateEnvVar` worked). Local `.env`: same price ids; the `VITE_*` values only as comments, because Vite and vitest load `VITE_*` from `.env` and a live token must not run on localhost.
 
-In progress: waiting for the owner's go for the merge to `main` + push (the production deploy).
+- [x] Owner yes to the merge + deploy and to the live-test discount. Merged with `--no-ff` as `9fb39e5` and pushed. Netlify did not build it: the merge message's body quoted the literal skip token (my mistake; Netlify skips a push whose head commit message contains it, even in the body). Started the build through the API instead (`createSiteBuild`, deploy `6af9daf3965159019b9702a5`, 16:16 WET), no extra commit.
+- [x] Live checkout features: `discounts_enabled: true` (the code field shows at checkout).
+
+- [x] Deploy `6af9daf3965159019b9702a5` ready on `9fb39e5`. Live bundle `index-D0JMsbSH.js` has the `live_0879…` token and both live `pri_` ids; signed-out `/pricing` shows two "Coming soon" buttons (headless Chromium); webhook POST from a laptop gets 403 (IP allowlist working).
+- [x] Test discount `dsc_01m7g01p6a0615x8keasjjtxsy`, code `PGNTEST5ZE2BP`: 100%, usage limit 1, only the two live pack prices, expires 2026-11-16T16:18:34Z. Archive it after the test.
+
+- [x] First Buy failed: Paddle overlay "Something went wrong"; console `transaction_default_checkout_url_not_set` (POST checkout-service.paddle.com/transaction-checkout 400). Root cause: live default payment link was null (owner had said leave it unset; sandbox had `https://photo2pgn.hintwise.org/pricing`). Owner yes: live `default_url` set to `https://photo2pgn.hintwise.org/pricing`. Open question 5 answered: Paddle.js checkouts need a default payment link even for overlay-only use.
+
+- [x] Live test passed (2026-11-15 16:25 UTC). Owner bought pack-50 with the code ("Add discount" sits in the overlay's order summary). Transaction `txn_01m7g0dhqzapvptp466wdykzkr` `completed`, origin web, subtotal 1000, discount 1000, tax 0, total 0 USD, customer `ctm_01m7g0989bbcxa3hcv2drdctdd`, custom_data pack-50 / 50 credits / user_id `e3a587c4-…`. Notice hook delivery `ntf_01m7g0eavgj06mckjcrgvcvbh0`: first attempt, HTTP 200 `{"recorded":true}` (so the IP allowlist and the new live secret both work). `GET /api/worker/payments`: one record, pack-50, 50 credits, right user_id, `grantedAt: null`.
+- [x] Discount archived (times_used 1).
+- Left alone (guardrail: never change live transactions): 3 `draft` and 1 `ready` transactions from the failed first attempts.
+
+In progress: owner adds 50 credits (Admin: add credits) to their account; then `POST /api/worker/payments/txn_01m7g0dhqzapvptp466wdykzkr/granted`.
 
 Remaining
 - [ ] `paddle-sandbox` MCP still refuses (curl works); not needed any more.
@@ -63,7 +75,7 @@ Remaining
 - [ ] Owner, in the dashboard: Website approval for photo2pgn.hintwise.org, bank details, verification.
 - [ ] Netlify: set `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_PRICE_PACK_20`, `VITE_PADDLE_PRICE_PACK_50`; fix `PGN_PADDLE_PRICE_PACK_20/_50` (now `500`/`1000`, must be the live `pri_` ids; same in local `.env`); set `PGN_PADDLE_WEBHOOK_SECRET` to the live destination's secret if it differs.
 - [ ] Merge this branch to `main` and push: the one production deploy the owner approved. Check the live bundle has the `live_` token, and that non-admins still see "Coming soon".
-- [ ] Default payment link once the domain is approved (see Open questions 5).
+- [x] Default payment link: set to `/pricing` (required; see Status).
 - [ ] Live test, after verification and approval: 100% discount limited to the two pack prices, usage limit 1, expiring in 24 h; the owner buys one pack, signed in, at `/pricing` (never pay for them); verify; owner grants; mark granted; archive the discount.
 - [ ] Owner decides on `VITE_PADDLE_OPEN=yes` (another deploy). Then delete this file and the memory note.
 
@@ -107,6 +119,7 @@ signed-out visitor sees "Coming soon". Then the live test (100% discount, owner 
 - Project rules ([CLAUDE.md](CLAUDE.md)): no Anthropic key anywhere; `[skip netlify]` in docs-only commits; tests never touch the network.
 - `.env.asc` (encrypted `.env`) is one change behind; the owner re-encrypts it.
 - Once deployed, probing the webhook from a laptop gets 403 (IP allowlist), not 401.
+- Never write the skip token in a commit message meant to deploy, not even to explain it: Netlify matches it anywhere in the head commit's message.
 - A memory note on the owner's Mac (`~/.claude/projects/-Users-pisan-bitbucket-pisanuw-photo2pgn/memory/paddle-live-test.md`) repeats this file; a cloud session will not see it.
 
 ## 8. How to run and verify
