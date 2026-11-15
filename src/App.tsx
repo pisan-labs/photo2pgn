@@ -21,7 +21,8 @@ import { ReadingsPanel, useReadings } from "./components/Readings";
 import { BuyCredits } from "./components/BuyCredits";
 import { checkoutConfigFrom } from "./lib/checkout";
 import { takeSharedPhotos } from "./lib/shared";
-import { useInstall } from "./lib/install";
+import { installWay, isStandalone, useInstall } from "./lib/install";
+import { InstallPanel } from "./components/InstallPanel";
 import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
 import type { Extraction, GameHeaders } from "./lib/schema";
 import { HandoffBanner, useHandoff } from "./components/Handoff";
@@ -49,6 +50,8 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: "upload" });
   // photo2pgn.hintwise.org/pricing opens the packs.
   const [buying, setBuying] = useState(() => window.location.pathname === "/pricing");
+  // photo2pgn.hintwise.org/install: the link to send people to put it on their phone.
+  const [installing, setInstalling] = useState(() => window.location.pathname === "/install");
   // Each sheet is one game (one or two photos); several are read side by side.
   const [sheets, setSheets] = useState<Sheet[]>([]);
   const [batch, setBatch] = useState<BatchRun | null>(null);
@@ -108,7 +111,7 @@ export default function App() {
   );
   const abort = useRef<AbortController | null>(null);
   const [incoming, setIncoming] = useState<File[] | undefined>(undefined);
-  const { canInstall, install, iosTip } = useInstall();
+  const { canInstall, install, iosTip, installed } = useInstall();
   // Opened from Chess TD to read one game and send it back.
   const { handoff, end: endHandoff } = useHandoff();
   const [sentToChessTd, setSentToChessTd] = useState(false);
@@ -328,7 +331,18 @@ export default function App() {
             </p>
           </section>
         )}
-        {view.kind === "upload" && (
+        {view.kind === "upload" && installing && (
+          <InstallPanel
+            way={installWay({ standalone: isStandalone(), canPrompt: canInstall, ua: navigator.userAgent })}
+            installed={installed}
+            onInstall={install}
+            onContinue={() => {
+              setInstalling(false);
+              if (window.location.pathname === "/install") window.history.replaceState(null, "", "/");
+            }}
+          />
+        )}
+        {view.kind === "upload" && !installing && (
           <>
             {buying && canBuy && (
               <BuyCredits

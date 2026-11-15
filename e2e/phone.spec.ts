@@ -108,3 +108,52 @@ test.describe("installed app", () => {
     await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
   });
 });
+
+test.describe("the install link on an iPhone", () => {
+  test.use(phone("iPhone 13"));
+
+  test("explains Share > Add to Home Screen, then goes on to the app", async ({ page }) => {
+    await page.goto("/install");
+    await expect(page.getByRole("heading", { name: "Install Photo to PGN" })).toBeVisible();
+    const steps = page.locator(".install-steps li");
+    await expect(steps).toHaveCount(3);
+    await expect(steps.nth(0)).toContainText("Share button");
+    await expect(steps.nth(1)).toContainText("Add to Home Screen");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await page.getByRole("button", { name: "Use it in the browser instead" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("heading", { name: "Install Photo to PGN" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try the demo game instead" })).toBeVisible();
+  });
+});
+
+test.describe("the install link on Android", () => {
+  test.use(phone("Pixel 7"));
+
+  test("one button opens the browser's install dialog", async ({ page }) => {
+    await page.goto("/install");
+    // Without the browser's offer yet: its menu.
+    await expect(page.locator(".install-steps")).toContainText("Install app");
+    // Chrome offers it (faked: headless Chrome never does).
+    await page.evaluate(() => {
+      const e = new Event("beforeinstallprompt") as Event & { prompt: () => Promise<void> };
+      e.prompt = async () => {
+        (window as unknown as { prompted: boolean }).prompted = true;
+      };
+      window.dispatchEvent(e);
+    });
+    await page.getByRole("button", { name: "Install Photo to PGN" }).click();
+    expect(await page.evaluate(() => (window as unknown as { prompted?: boolean }).prompted)).toBe(true);
+    await expect(page.getByText("Closed the dialog?")).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event("appinstalled")));
+    await expect(page.getByRole("status")).toContainText("Installed. Photo to PGN is on your home screen.");
+    await expect(page.locator(".install-steps")).toHaveCount(0);
+    await page.getByRole("button", { name: "Go to Photo to PGN" }).click();
+    await expect(page).toHaveURL(/\/$/);
+  });
+});
+
+test("the install link on a computer says to open it on the phone", async ({ page }) => {
+  await page.goto("/install");
+  await expect(page.locator(".install")).toContainText(/Open this page on your phone: localhost:4173\/install/);
+});
