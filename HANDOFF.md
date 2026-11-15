@@ -30,10 +30,33 @@ Done
 - [x] Readiness: `/terms`, `/refunds`, `/privacy`, `/pricing` all 200 with their own titles; description present; domain serves the app.
 - [x] The production `PGN_PADDLE_WEBHOOK_SECRET` equals local `.env` `PGN_PADDLE_WEBHOOK_SECRET_WEBHOOK` (a signed, ignored event got 200).
 
-In progress: nothing.
+- [x] 2026-11-15 (session 2): handoff verified against the repo: clean tree, branch in sync with origin, `npm run check` exit 0, `main` still `8620ef5`. `paddle-live` answers: `products.list()` returns 0 products (live catalog empty, so the packs must be created). `paddle-sandbox` still refuses: "You aren't permitted to perform this request" (credentials rejected, not the network).
+
+- [x] Live audit, read-only (2026-11-15, session 2): 0 products, 0 prices, 0 discounts, 0 client tokens. Destinations: `ntfset_01m7f79d55aaznd89x3smbdrhb` ("Notice hook", `https://photo2pgn.hintwise.org/api/paddle-webhook`, `transaction.completed`, active) and `ntfset_01m7at507z10c7dakew982z4qp` (email to support, many events); reuse both, create none. Domain `photo2pgn.hintwise.org` approved (`chedom_01m7fd9nwwvct819kjsdr81cxj`, Apple Pay verified). Onboarding verification `completed` (account_setup, automated_review). Payment methods enabled: apple_pay, bancontact, card, paypal. Tax `location`; balance currency USD. Default payment link: `null`. Not yet compared: the secret of the "Notice hook" destination vs production.
+
+- [x] Sandbox read via curl with `PADDLE_SANDBOX_API_KEY` (owner yes; the MCP still refuses). Sandbox packs to copy: product "Photo to PGN credits" (`pro_01m7ar3rnjcff45z5929dyqzyj`, saas, custom_data app=photo2pgn); prices `pri_01m7ar3rtacs2n7f8sbvgzaptr` (20 credits, 500 USD) and `pri_01m7ar3rz6dtyarh4mt9k7b290` (50 credits, 1000 USD), both `tax_mode: external`, quantity 1..1, custom_data `{app, credits}`. Other sandbox products (Starter/Pro/Advanced) are not photo2pgn: skip. No sandbox discounts. Sandbox tax `location`, balance USD, same as live: nothing to mirror. Sandbox destination points at `/api/paddle/webhook` (different path from live's).
+- [x] Owner decisions: live payment methods = credit cards and PayPal; default payment link stays unset; compare webhook secrets.
+- [x] Secret check by sha256 prefix: live "Notice hook" secret `0e5c41d3`; local `.env` `PGN_PADDLE_WEBHOOK_SECRET_WEBHOOK` (what production holds) `dff2e225`. They DIFFER: production would reject real live deliveries (401) until `PGN_PADDLE_WEBHOOK_SECRET` is set to the live destination's secret.
+- [x] `paddle-live` MCP lacks `product.write`: `products.create` refused ("not authorized to create|read product"). Nothing was created in live.
+
+- [x] Owner (later): `.env` secret "is the one from notifications-v2"; Apple Pay stays on (so live = card, PayPal, Apple Pay; Bancontact off); set the secret on Netlify myself; create packs + token once writes work.
+- [x] Root cause of the secret mismatch: local `PGN_PADDLE_WEBHOOK_SECRET` is 33 chars with no `pdl_ntfset_` prefix; it matches neither the live destination's secret (70 chars, `pdl_ntfset_01m7f79d…`, sha8 `0e5c41d3`), its last 32/33 chars, nor the sandbox destination's (sha8 `d40dfdf3`). Where it came from: I don't know. Paddle signs with `endpoint_secret_key`, so that is what the handler needs.
+- [x] Netlify `PGN_PADDLE_WEBHOOK_SECRET` (production context) set to the live destination's secret via `setEnvVarValue` (exit 0). Other contexts keep the old value. Functions read it only after the next deploy; not verified yet (masked; a laptop probe hits the old build). Local `.env` updated the same way, old line kept as a comment. `.env.asc` is now two changes behind.
+- [x] `checkout_settings.write` also missing: turning Bancontact off was refused. Nothing changed in live.
+
+- [x] Owner granted `paddle-live` write permissions. Created in live (sandbox → live):
+  - product `pro_01m7ar3rnjcff45z5929dyqzyj` → `pro_01m7fxjxrn0gx7mwcknyxmjx3a` ("Photo to PGN credits")
+  - pack-20 `pri_01m7ar3rtacs2n7f8sbvgzaptr` → `pri_01m7fxjy6js4cmtqn4qww0xd04` (500 USD)
+  - pack-50 `pri_01m7ar3rz6dtyarh4mt9k7b290` → `pri_01m7fxjybjk7ey03p99tegkz4n` (1000 USD)
+  - client token `ctkn_01m7fxk1yhmrz290ksjz60hfm9` ("photo2pgn pricing page (live)", `live_0879…`)
+  - Bancontact off; live payment methods now apple_pay, card, paypal.
+- [x] Netlify: created `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_PRICE_PACK_20`, `VITE_PADDLE_PRICE_PACK_50` (builds scope, all contexts); `PGN_PADDLE_PRICE_PACK_20/_50` now the live `pri_` ids (`setEnvVarValue` on context `all` failed, `updateEnvVar` worked). Local `.env`: same price ids; the `VITE_*` values only as comments, because Vite and vitest load `VITE_*` from `.env` and a live token must not run on localhost.
+
+In progress: waiting for the owner's go for the merge to `main` + push (the production deploy).
 
 Remaining
-- [ ] Both Paddle MCPs answer (in the last session `paddle-sandbox` refused every call; `paddle-live` was not loaded).
+- [ ] `paddle-sandbox` MCP still refuses (curl works); not needed any more.
+- [ ] Owner: grant `paddle-live` write permissions (product, price, client token, checkout settings) at https://vendors.paddle.com/mcps.
 - [ ] Migration audit, read-only, sandbox vs live: products, prices, discounts, client tokens, notification destinations, payment methods, tax, balance currency, checkout domains, default payment link, verifications. Report done vs missing.
 - [ ] Create in live only what is missing: the two pack products/prices, a `live_` client token, and a notification destination only if none exists for `https://photo2pgn.hintwise.org/api/paddle-webhook` with `transaction.completed`. Record the sandbox → live id map.
 - [ ] Ask the owner which payment methods to enable, and before mirroring tax mode or balance currency.
@@ -52,9 +75,9 @@ Remaining
 
 ## 4. Next step
 
-Run a read-only `client.products.list()` through `paddle-sandbox` and through `paddle-live`. If either is
-refused or missing, stop and ask the owner to re-authenticate it (`/mcp`) or grant permissions under
-Connectors > MCPs in that Paddle account.
+With the owner's go: `npm run check` and `npm run e2e`, merge `feat/paddle-mode-from-token` into `main`, push
+(the production deploy). Then check the live bundle has `live_0879…` and both live `pri_` ids, and that a
+signed-out visitor sees "Coming soon". Then the live test (100% discount, owner buys at `/pricing`).
 
 ## 5. Decisions and why
 
@@ -71,6 +94,8 @@ Connectors > MCPs in that Paddle account.
 - curl to `api.paddle.com` with `.env`'s `pdl_live_` key in place of the MCP: offered, owner chose the MCP.
 - "Commenting out" Netlify variables: Netlify has no comments, so they were deleted and kept as comments in local `.env`.
 - Pushing the branch before the live ids exist: held, so code and settings ship in one build.
+- Copying `.env`'s `PGN_PADDLE_WEBHOOK_SECRET` to production (owner believed it was the live one): it was already there, and it is not the live destination's `endpoint_secret_key`. Used the API's value instead.
+- Reading the live secret with curl and the live API key, to keep it out of the transcript: the owner prefers the MCP, so it went through `paddle-live`.
 
 ## 7. Constraints and gotchas
 
@@ -110,8 +135,8 @@ None running or scheduled.
 
 1. Which payment methods in live? (owner)
 2. Do tax mode and balance currency differ between sandbox and live, and should live mirror sandbox? Not read yet.
-3. Is the production webhook secret the live destination's or the sandbox one's? I don't know.
-4. What already exists in live (products, prices, client token, destination)? I don't know.
+3. Answered: it was neither; production now has the live destination's secret (takes effect at the next deploy).
+4. Answered: live had only the two destinations, the approved domain and completed verification; no catalog, no token.
 5. Default payment link: Paddle appends `?_ptxn=` and expects Paddle.js on that page to open the checkout. The app loads Paddle.js only when someone presses Buy and ignores `_ptxn`. Uncertain whether an overlay-only integration needs this handled.
 6. Does a $0 one-time checkout ask for a card? I don't know.
 7. Why `paddle-sandbox` refused every call ("not permitted"): I don't know.
