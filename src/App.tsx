@@ -78,7 +78,9 @@ export default function App() {
   }, [user, signInAvailable, onStart, checks]);
   const checked = user && allowance ? allowance : null;
   const credits = checked ? creditsOf(checked) : null;
-  const canBuy = Boolean(CHECKOUT) || Boolean(credits?.admin);
+  // Until sales open (VITE_PADDLE_OPEN=yes) only admins can buy; everyone else sees "Coming soon".
+  const checkout = CHECKOUT && (CHECKOUT.open || credits?.admin) ? CHECKOUT : null;
+  const canBuy = Boolean(checkout) || Boolean(credits?.admin);
   const out = checked && user ? outMarkOf(checked, user.id) : stillOut(outMark, user?.id ?? null);
   useEffect(() => {
     if (!out) return;
@@ -348,7 +350,7 @@ export default function App() {
             {/* Everyone at /pricing; from the start page's links once credits can be bought (or for admins). */}
             {buying && (
               <BuyCredits
-                config={CHECKOUT}
+                config={checkout}
                 problem={CHECKOUT_PROBLEM}
                 admin={Boolean(credits?.admin)}
                 buyer={user ? { userId: user.id, email: user.email ?? null } : null}

@@ -17,6 +17,8 @@ export interface CheckoutConfig {
   environment: "sandbox" | "production";
   /** Paddle price id for each pack id. */
   prices: Record<string, string>;
+  /** VITE_PADDLE_OPEN=yes: everyone can buy. Until then only admins, so the live test runs on the real domain before sales open. */
+  open: boolean;
 }
 
 /** The build variable holding a pack's Paddle price id: pack-20 -> VITE_PADDLE_PRICE_PACK_20. */
@@ -46,7 +48,7 @@ export function checkoutSetupFrom(env: Record<string, unknown> = import.meta.env
     if (!v.startsWith("pri_")) return off(`${priceVar(p)} is not a Paddle price id (pri_…)`);
     prices[p.id] = v;
   }
-  return { config: { token, environment, prices }, problem: null };
+  return { config: { token, environment, prices, open: str("VITE_PADDLE_OPEN") === "yes" }, problem: null };
 }
 
 export const checkoutConfigFrom = (env: Record<string, unknown> = import.meta.env): CheckoutConfig | null => checkoutSetupFrom(env).config;

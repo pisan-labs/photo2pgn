@@ -121,3 +121,5 @@
 2026-11-15 [code] Paddle webhook: only Paddle's addresses (api.paddle.com/ips, kept an hour, never hard-coded), else 403; 503 when the list cannot be had; .env.example lists the Paddle settings
 
 2026-11-15 [note] Readiness for Paddle verification: terms/refunds/privacy live (200, own titles), description present; contact only as the footer's project-idea email; catalog check pending paddle-live
+
+2026-11-15 [decision] Owner (no answer, recommendation taken): with live Paddle settings only admins can buy until VITE_PADDLE_OPEN=yes, so the live test runs on the real domain before sales open

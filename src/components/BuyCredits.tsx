@@ -58,6 +58,9 @@ export function BuyCredits({
           Close
         </button>
       </div>
+      {config && !config.open && admin && (
+        <p className="notice">Admins only: sales are not open yet (VITE_PADDLE_OPEN=yes opens them), so only admins can buy. Everyone else sees Coming soon.</p>
+      )}
       {!config && (
         <p className="notice">
           {admin

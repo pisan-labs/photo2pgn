@@ -10,7 +10,10 @@ describe("settings from the build", () => {
     expect(checkoutConfigFrom({})).toBeNull();
     expect(checkoutConfigFrom({ VITE_PADDLE_CLIENT_TOKEN: "t" })).toBeNull();
     expect(checkoutConfigFrom({ ...FULL, VITE_PADDLE_PRICE_PACK_50: " " })).toBeNull();
-    expect(checkoutConfigFrom(FULL)).toEqual({ token: "test_abc", environment: "sandbox", prices: { "pack-20": "pri_20", "pack-50": "pri_50" } });
+    expect(checkoutConfigFrom(FULL)).toEqual({ token: "test_abc", environment: "sandbox", prices: { "pack-20": "pri_20", "pack-50": "pri_50" }, open: false });
+    // Sales open only with VITE_PADDLE_OPEN=yes; until then only admins can buy.
+    expect(checkoutConfigFrom({ ...FULL, VITE_PADDLE_OPEN: " yes " })!.open).toBe(true);
+    expect(checkoutConfigFrom({ ...FULL, VITE_PADDLE_OPEN: "true" })!.open).toBe(false);
     expect(CREDIT_PACKS.map(priceVar)).toEqual(["VITE_PADDLE_PRICE_PACK_20", "VITE_PADDLE_PRICE_PACK_50"]);
   });
   it("takes live or sandbox from the client token, and sells nothing when a setting disagrees", () => {
