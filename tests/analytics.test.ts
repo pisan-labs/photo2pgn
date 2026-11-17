@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { track } from "../src/lib/analytics";
 
-const SCRIPT_SHA = "fe0b6e92ddd6093e9ba7fa2b9fff32cd68bb5a42e191e9770fda93e5a1ba6227";
+const SCRIPT_SHA = "d2833162b9f18f9f2fdb36dbd62440c13ee26c6600200d8e55ad32b907f00633";
 const TAG = '<script defer src="/hw-events.js" data-app="photo2pgn"></script>';
 const PAGES = ["index.html", "public/terms.html", "public/refunds.html", "public/privacy.html"];
 
