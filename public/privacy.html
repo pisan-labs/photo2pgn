@@ -6,6 +6,7 @@
     <meta name="description" content="What Photo to PGN keeps about you, and why." />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231f3a5f'/%3E%3Cg fill='none' stroke='%23e9c99b' stroke-width='5.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 32V20a4 4 0 0 1 4-4h12'/%3E%3Cpath d='M68 16h12a4 4 0 0 1 4 4v12'/%3E%3Cpath d='M84 68v12a4 4 0 0 1-4 4H68'/%3E%3Cpath d='M32 84H20a4 4 0 0 1-4-4V68'/%3E%3C/g%3E%3Cg transform='translate%2850 50%29 scale%280.9%29 translate%28-50 -52%29'%3E%3Cpath fill='%23ffffff' d='M65 72C68 58 67 40 56 30L55 21 48 27.5C40 28.5 34 34.5 31 42.5L27.5 50C26.5 53 28.5 56 31.5 55L41.5 51C43.5 51 44.5 53 42.5 56 39.5 61 37.5 66 37.5 72Z'/%3E%3Cg fill='none' stroke='%231f3a5f' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M59.5 37.5l4-2.5'/%3E%3Cpath d='M62 46l4.5-1.5'/%3E%3Cpath d='M63 55h4.5'/%3E%3C/g%3E%3Crect x='33.5' y='72' width='34' height='5' rx='1.5' fill='%23ffffff'/%3E%3Crect x='30.5' y='78' width='40' height='5.5' rx='2' fill='%23ffffff'/%3E%3Ccircle cx='44.5' cy='37' r='2.6' fill='%231f3a5f'/%3E%3C/g%3E%3C/svg%3E" />
     <title>Privacy policy · Photo to PGN</title>
+    <script defer src="/hw-events.js" data-app="photo2pgn"></script>
     <style>
       :root { --bg: #f6f5f1; --panel: #fff; --text: #1d232b; --muted: #5b6470; --line: #dcd9d0; --accent: #2f6db5; }
       @media (prefers-color-scheme: dark) {
@@ -30,7 +31,7 @@
     <main>
       <a class="back" href="/">← Photo to PGN</a>
       <h1>Privacy policy</h1>
-      <p class="updated">Last updated: 13 November 2026</p>
+      <p class="updated">Last updated: 17 November 2026</p>
 
       <p>This policy covers Photo to PGN at photo2pgn.hintwise.org, provided by HintWise. Questions, or requests to see or delete your data: <a href="mailto:builder@hintwise.org">builder@hintwise.org</a>.</p>
 
@@ -40,6 +41,7 @@
         <li><strong>Your games:</strong> what was read, your corrections and notes, and the PGN. They are kept in your browser. When you are signed in they are also kept in your HintWise account in Supabase (United States), where only you can see them.</li>
         <li><strong>Your use of Photo to PGN:</strong> when you first and last used it, and how many readings you have done. HintWise's admins can see each person's email address, use and credits, to look after the service and give credits.</li>
         <li><strong>A record of each reading with credits:</strong> when it happened, the model, its size in tokens, its cost and whether it worked. It is used to count credits and limits. It does not contain your photos or moves.</li>
+        <li><strong>Visits:</strong> HintWise counts visits for its own analytics, with no cookie and nothing kept in your browser. Each page sends the page's address without anything after a <code>?</code> or <code>#</code> (parts that look like an id are masked), the site you came from (its name only), how long the page was open, the site of a link you follow out, script errors with any quoted text taken out, and which main buttons were used (reading sheets, with how many and whether credits or your own key paid; opening the demo; downloading, copying or sending a PGN, with which way). It never includes your photos, scoresheets, games, moves, names or anything you type. Our server counts you as a visitor with a code made from your IP address, your browser and a random value that is replaced every day, so visits on different days cannot be linked and your IP address is not stored. Nothing is sent if your browser has Global Privacy Control or Do Not Track turned on.</li>
         <li><strong>Purchases:</strong> Paddle handles your payment details; we never see your card number. Paddle tells us what you bought (your email address, the pack, the amount and your country for tax).</li>
       </ul>
 
@@ -53,12 +55,12 @@
       <p>Anthropic handles them under its commercial terms and <a href="https://www.anthropic.com/legal/privacy">privacy policy</a>.</p>
 
       <h2>In your browser</h2>
-      <p>Your browser keeps your sign-in session, your games, your settings and, only if you tick "Remember on this device", your Anthropic API key. Your key is sent only to Anthropic. We use no advertising or analytics trackers.</p>
+      <p>Your browser keeps your sign-in session, your games, your settings and, only if you tick "Remember on this device", your Anthropic API key. Your key is sent only to Anthropic. We use no advertising or third-party trackers, and HintWise's own visit counting (above) keeps nothing in your browser.</p>
 
       <h2>Who else handles your data</h2>
       <ul>
         <li>Anthropic: reads the photos.</li>
-        <li>Supabase: accounts, saved games, and the records of readings and credits.</li>
+        <li>Supabase: accounts, saved games, the records of readings and credits, and the visit counts.</li>
         <li>Netlify: hosts the site, and keeps standard server logs (such as IP addresses) for security and running the service.</li>
         <li>Paddle: sells credits, and handles payment and tax.</li>
         <li>Lichess: only if you press "Open in Lichess". Games imported there are public on Lichess.</li>

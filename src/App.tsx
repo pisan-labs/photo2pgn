@@ -28,6 +28,7 @@ import { DEMO_EXTRACTION, DEMO_IMAGE_URL } from "./demo/sample";
 import type { Extraction, GameHeaders } from "./lib/schema";
 import { HandoffBanner, useHandoff } from "./components/Handoff";
 import { applyHints } from "./lib/handoff";
+import { track } from "./lib/analytics";
 
 const LIBRARY_STORAGE = "photo2pgn.games";
 const MAX_PAGES = 2;
@@ -235,6 +236,8 @@ export default function App() {
   }
 
   async function convert() {
+    // How many sheets and who pays; never the photos or what is read from them.
+    if (sheets.length) track("read_started", { sheets: sheets.length, key: choice === "sign-in" ? "credits" : "own_key" });
     if (sheets.length > 1) return readMany(sheets);
     const pages = sheets[0] ?? [];
     setError(null);
@@ -276,6 +279,7 @@ export default function App() {
   }
 
   function demo() {
+    track("demo_opened", {});
     setSession({ id: "demo", extraction: DEMO_EXTRACTION, edits: {}, headers: DEMO_EXTRACTION.headers, images: [DEMO_IMAGE_URL], demo: true });
     setView({ kind: "review" });
   }
