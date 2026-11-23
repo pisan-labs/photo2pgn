@@ -135,3 +135,7 @@
 2026-11-15 [note] Live $0 test passed: txn_01m7g0dhqzapvptp466wdykzkr completed, webhook 200 first try, payment record right, granted; test discount archived
 
 2026-11-15 [decision] Owner: sales open, VITE_PADDLE_OPEN=yes on Netlify (production builds only); HANDOFF.md retired
+
+2026-11-17 [feature] HintWise first-party analytics (owner: "add analytics to the rest of the apps", on the analytics branch, not deployed): public/hw-events.js copied byte for byte, the tag on every page, events read_started, pgn_exported, demo_opened; the privacy page says what is counted
+
+2026-11-23 [decision] Owner, 23 Nov: "Merge all the apps": the analytics branch brought onto main (branch analytics-on-main); the merge deploys photo2pgn.hintwise.org; the origin https://photo2pgn.hintwise.org was registered by claude-built-apps shared/0016 (applied 17 Nov)
