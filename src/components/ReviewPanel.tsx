@@ -8,6 +8,7 @@ import type { SavedGame } from "../lib/library";
 const FLIP_STORAGE = "photo2pgn.flipped";
 import { buildPgn, pgnFileName } from "../lib/pgn";
 import { CHESSCOM_ANALYSIS, canShareFiles, gameTitle, importToLichess, mailtoHref, pgnFile } from "../lib/export";
+import { track, type ExportWay } from "../lib/analytics";
 import { GameViewer, STATUS_LABEL } from "./GameViewer";
 import { SendToChessTd } from "./Handoff";
 import { resultMessage, type Handoff } from "../lib/handoff";
@@ -262,7 +263,14 @@ function Review({
 
       <section className="panel" aria-labelledby="pgn-title">
         <h2 id="pgn-title">PGN</h2>
-        <PgnExport headers={headers} analysis={analysis} pgn={pgn} commentFixes={commentFixes} setCommentFixes={setCommentFixes} />
+        <PgnExport
+          headers={headers}
+          analysis={analysis}
+          pgn={pgn}
+          commentFixes={commentFixes}
+          setCommentFixes={setCommentFixes}
+          demo={session.demo}
+        />
       </section>
     </div>
   );
@@ -487,16 +495,21 @@ function PgnExport({
   pgn,
   commentFixes,
   setCommentFixes,
+  demo,
 }: {
   headers: GameHeaders;
   analysis: Analysis;
   pgn: string;
   commentFixes: boolean;
   setCommentFixes: (v: boolean) => void;
+  demo: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const fileName = pgnFileName(headers);
+  // Which way out, never the game itself.
+  const exported = (how: ExportWay) => track("pgn_exported", { how, demo });
   const download = () => {
+    exported("download");
     const url = URL.createObjectURL(new Blob([pgn], { type: "application/x-chess-pgn" }));
     const a = document.createElement("a");
     a.href = url;
@@ -520,6 +533,7 @@ function PgnExport({
   const [sending, setSending] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const share = async () => {
+    exported("share");
     try {
       await navigator.share({ files: [pgnFile(pgn, fileName)], title: gameTitle(headers) });
     } catch {
@@ -528,6 +542,7 @@ function PgnExport({
   };
   const toLichess = async () => {
     setSendError(null);
+    exported("lichess");
     // Open the tab now, while the click still counts, then point it at the game.
     const tab = window.open("about:blank", "_blank");
     setSending("lichess");
@@ -543,6 +558,7 @@ function PgnExport({
     }
   };
   const toChessCom = async () => {
+    exported("chesscom");
     const ok = await copy();
     setSendError(ok ? null : "Copy the PGN above first, then paste it on Chess.com.");
     window.open(CHESSCOM_ANALYSIS, "_blank", "noopener");
@@ -564,7 +580,14 @@ function PgnExport({
         <button type="button" className="primary" onClick={download}>
           Download {fileName}
         </button>
-        <button type="button" className="secondary" onClick={copy}>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            exported("copy");
+            void copy();
+          }}
+        >
           {copied ? "Copied" : "Copy"}
         </button>
         {shareable ? (
@@ -572,7 +595,7 @@ function PgnExport({
             Share…
           </button>
         ) : (
-          <a className="button secondary" href={mailtoHref(pgn, headers)}>
+          <a className="button secondary" href={mailtoHref(pgn, headers)} onClick={() => exported("email")}>
             Email
           </a>
         )}
