@@ -67,11 +67,14 @@ describe("privacy page", () => {
     const t = readFileSync("public/privacy.html", "utf8").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     expect(t).not.toContain("no advertising or analytics trackers");
     expect(t).toContain("HintWise counts visits for its own analytics, with no cookie and nothing kept in your browser");
-    expect(t).toContain("It never includes your photos, scoresheets, games, moves, names or anything you type");
+    expect(t).toContain("Apart from what an error message may contain, it never includes your photos, scoresheets, games, moves, names or anything you type");
     expect(t).toContain("Nothing is sent if your browser has Global Privacy Control or Do Not Track turned on");
+    // The redaction in hw-events.js and events.ts misses some quoting, so the page promises no more than it does.
+    expect(t).toContain("the script removes the quoted text, email addresses and long numbers it can detect, but a message can still contain words a browser quotes from what you typed");
+    expect(t).toContain("with which way and whether it was the demo game");
     // The server's side (claude-built-apps platform/src/analytics): a device class from the user agent,
-    // and a daily salt that app_events_record deletes when it records a later day's first event.
+    // and one salt per UTC day for every app, deleted by app_events_record at a later day's first event.
     expect(t).toContain("Our server also keeps the kind of device (phone, tablet or computer), worked out from your browser's user agent");
-    expect(t).toContain("deleted once the next day's first visit is counted");
+    expect(t).toContain("The random value changes each UTC day and serves every HintWise app; it is deleted at the first visit any HintWise app counts on a later UTC day, so visits on different UTC days cannot be linked");
   });
 });

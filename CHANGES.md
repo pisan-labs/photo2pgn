@@ -143,3 +143,5 @@
 2026-11-26 [doc] privacy.html: the server keeps a device class (phone, tablet or computer) from the user agent; the daily salt is deleted once the next day's first visit is counted; date 26 November 2026
 
 2026-11-26 [note] Correction to the 2026-11-23 line: the branch merged as PR #7 was analytics-merge (71dc723), not analytics-on-main
+
+2026-11-26 [doc] privacy.html, review r1: the salt changes each UTC day, serves every HintWise app, goes at a later UTC day's first visit; redaction only as far as the script can tell; the export's demo flag named
