@@ -69,5 +69,9 @@ describe("privacy page", () => {
     expect(t).toContain("HintWise counts visits for its own analytics, with no cookie and nothing kept in your browser");
     expect(t).toContain("It never includes your photos, scoresheets, games, moves, names or anything you type");
     expect(t).toContain("Nothing is sent if your browser has Global Privacy Control or Do Not Track turned on");
+    // The server's side (claude-built-apps platform/src/analytics): a device class from the user agent,
+    // and a daily salt that app_events_record deletes when it records a later day's first event.
+    expect(t).toContain("Our server also keeps the kind of device (phone, tablet or computer), worked out from your browser's user agent");
+    expect(t).toContain("deleted once the next day's first visit is counted");
   });
 });

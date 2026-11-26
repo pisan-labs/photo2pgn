@@ -139,3 +139,7 @@
 2026-11-17 [feature] HintWise first-party analytics (owner: "add analytics to the rest of the apps", on the analytics branch, not deployed): public/hw-events.js copied byte for byte, the tag on every page, events read_started, pgn_exported, demo_opened; the privacy page says what is counted
 
 2026-11-23 [decision] Owner, 23 Nov: "Merge all the apps": the analytics branch brought onto main (branch analytics-on-main); the merge deploys photo2pgn.hintwise.org; the origin https://photo2pgn.hintwise.org was registered by claude-built-apps shared/0016 (applied 17 Nov)
+
+2026-11-26 [doc] privacy.html: the server keeps a device class (phone, tablet or computer) from the user agent; the daily salt is deleted once the next day's first visit is counted; date 26 November 2026
+
+2026-11-26 [note] Correction to the 2026-11-23 line: the branch merged as PR #7 was analytics-merge (71dc723), not analytics-on-main
