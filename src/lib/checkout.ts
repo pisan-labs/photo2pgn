@@ -5,11 +5,11 @@
 // sandbox (owner, 15 Nov), so the two cannot disagree; VITE_PADDLE_ENV is
 // optional, and if it says otherwise nothing is for sale.
 //
-// The credits: for now the owner adds them by hand (Admin: add credits)
-// when Paddle reports a payment (owner, 13 Nov). The transaction's
-// custom_data (app, user_id, pack, credits) says whose HintWise account
-// paid, whatever email address was typed at checkout; a webhook can read
-// the same later.
+// The credits: an admin adds them from the admin panel's "Payments to
+// grant" when Paddle reports a payment (owner, 28 Nov; by hand from 13 Nov).
+// The transaction's custom_data (app, user_id, pack, credits, and the
+// account's email) says whose HintWise account paid, whatever email address
+// was typed at checkout; the webhook records it, and the panel grants to it.
 import { CREDIT_PACKS, PADDLE_APP_TAG, type CreditPack } from "./credits";
 
 export interface CheckoutConfig {

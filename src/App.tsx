@@ -17,6 +17,7 @@ import { newId, SupabaseRepository } from "./lib/repository";
 import { getSupabase } from "./lib/supabase";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { AdminCredits } from "./components/AdminCredits";
+import { AdminPayments } from "./components/AdminPayments";
 import { ReadingsPanel, useReadings } from "./components/Readings";
 import { BuyCredits } from "./components/BuyCredits";
 import { checkoutSetupFrom } from "./lib/checkout";
@@ -364,7 +365,7 @@ export default function App() {
                   if (window.location.pathname === "/pricing") window.history.replaceState(null, "", "/");
                 }}
                 onPaid={() => {
-                  // The owner adds the credits by hand for now (13 Nov); the count is asked
+                  // An admin adds the credits from "Payments to grant" (28 Nov); the count is asked
                   // again on each return to the start page, and once in a while meanwhile.
                   for (const ms of [60_000, 300_000]) setTimeout(() => setChecks((c) => c + 1), ms);
                 }}
@@ -448,6 +449,7 @@ export default function App() {
               onOpen={openGame}
             />
             {credits?.admin && <AdminCredits onChanged={() => setChecks((c) => c + 1)} />}
+            {credits?.admin && <AdminPayments onGranted={() => setChecks((c) => c + 1)} />}
           </>
         )}
 

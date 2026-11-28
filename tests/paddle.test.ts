@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { memoryKV } from "../netlify/lib/kv";
 import { paddleSignature } from "./helpers";
 import { PADDLE_IPS_URL, handlePaddleWebhook, handlePaymentGranted, handlePayments, inCidrs, paddleConfigFrom, paddleIps, validSignature, type Payment } from "../netlify/lib/paddle";
+import { paidCheck, paidWarning } from "../src/lib/payments";
 
 const PADDLE_IP = "34.237.3.244";
 const IPS = ["34.237.3.244/32", "52.11.166.252/32"];
@@ -110,6 +111,28 @@ describe("webhook", () => {
     expect(p).toMatchObject({ pack: "pack-50", credits: 50, userId: "u1", email: "a@example.com", customerId: "ctm_1", total: "1000", currency: "USD", grantedAt: null });
   });
 
+  it("keeps Paddle's price before tax and its discount, so the panel never takes a total with tax in it for the list price", async () => {
+    const { post, payments } = setup();
+    // Review r2's case: 15% off the US$5 pack at 20% VAT (Paddle's details.totals, strings in cents).
+    const totals = { subtotal: "500", discount: "75", tax: "85", total: "510", grand_total: "510" };
+    const body = JSON.stringify({
+      event_type: "transaction.completed",
+      data: { id: "txn_vat", customer_id: "ctm_1", currency_code: "USD", items: [{ price: { id: "pri_20" } }], details: { totals }, custom_data: { app: "photo2pgn", user_id: "u1", email: "a@example.com" } },
+    });
+    expect(await (await post(body)).json()).toEqual({ recorded: true });
+    const p = (await payments.getJSON<Payment>("payment/txn_vat"))!.value;
+    expect(p).toMatchObject({ pack: "pack-20", credits: 20, total: "510", subtotal: "500", discount: "75", currency: "USD" });
+    const check = paidCheck(p);
+    expect(check).toMatchObject({ kind: "less", discount: { text: "US$0.75" } });
+    expect(paidWarning(check)).toBe("Paid US$5.10 after a discount of US$0.75 off the pack's list price of US$5 (before tax). Check the sale in Paddle before granting the whole pack.");
+    // The same pack at full price with the same tax is full; one Paddle sent no subtotal for is not known.
+    await post(sale("txn_full", { app: "photo2pgn" }, "pri_20", { details: { totals: { subtotal: "500", discount: "0", tax: "100", total: "600", grand_total: "600" } } }));
+    expect(paidCheck((await payments.getJSON<Payment>("payment/txn_full"))!.value)).toMatchObject({ kind: "full" });
+    await post(sale("txn_bare", { app: "photo2pgn" }, "pri_20", { details: { totals: { grand_total: "600" } } }));
+    expect((await payments.getJSON<Payment>("payment/txn_bare"))!.value).toMatchObject({ total: "600", subtotal: null, discount: null });
+    expect(paidCheck((await payments.getJSON<Payment>("payment/txn_bare"))!.value)).toMatchObject({ kind: "unknown", pretax: true });
+  });
+
   it("keeps a purchase of an unknown price, without credits", async () => {
     const { post, payments } = setup();
     await post(txn("txn_2", "pri_other"));
@@ -152,7 +175,7 @@ describe("webhook", () => {
     expect(await (await post(sale("txn_noapp", { user_id: "u2" }))).json()).toEqual({ recorded: true });
     expect(await (await post(sale("txn_mcm", mcm))).json()).toEqual({ ignored: true, reason: "other app" });
     expect((await payments.getJSON<Payment>("payment/txn_own"))!.value).toEqual({
-      transactionId: "txn_own", customerId: "ctm_2", priceIds: ["pri_50"], pack: "pack-50", credits: 50, userId: "u1", email: "a@example.com", total: "1500", currency: "USD", completedAt: NOW.toISOString(), grantedAt: null,
+      transactionId: "txn_own", customerId: "ctm_2", priceIds: ["pri_50"], pack: "pack-50", credits: 50, userId: "u1", email: "a@example.com", total: "1500", subtotal: null, discount: null, currency: "USD", completedAt: NOW.toISOString(), grantedAt: null,
     });
     expect((await payments.getJSON<Payment>("payment/txn_own_other"))!.value).toMatchObject({ pack: null, credits: null, userId: "u1" });
     expect((await payments.getJSON<Payment>("payment/txn_none"))!.value).toMatchObject({ pack: null, userId: null, email: null });
@@ -208,7 +231,7 @@ describe("webhook", () => {
     }
     expect((await payments.list("payment/")).sort()).toEqual(kept.sort());
     expect((await payments.getJSON<Payment>("payment/txn_one21"))!.value).toEqual({
-      transactionId: "txn_one21", customerId: "ctm_2", priceIds: ["pri_other"], pack: null, credits: null, userId: "u4", email: null, total: "1500", currency: "USD", completedAt: NOW.toISOString(), grantedAt: null,
+      transactionId: "txn_one21", customerId: "ctm_2", priceIds: ["pri_other"], pack: null, credits: null, userId: "u4", email: null, total: "1500", subtotal: null, discount: null, currency: "USD", completedAt: NOW.toISOString(), grantedAt: null,
     });
   });
 
