@@ -2,6 +2,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { CREDIT_PACKS } from "../src/lib/credits";
 import { checkoutConfigFrom, checkoutSetupFrom, environmentOf, openCheckout, perCredit, priceVar, type PaddleLike } from "../src/lib/checkout";
+import { memoryKV } from "../netlify/lib/kv";
+import { handlePaddleWebhook, paddleConfigFrom, type Payment } from "../netlify/lib/paddle";
+import { paddleSignature } from "./helpers";
 
 const FULL = { VITE_PADDLE_CLIENT_TOKEN: " test_abc ", VITE_PADDLE_PRICE_PACK_20: "pri_20", VITE_PADDLE_PRICE_PACK_50: "pri_50" };
 
@@ -82,6 +85,27 @@ describe("checkout", () => {
     fire("");
     expect(later).toEqual(["checkout.closed"]);
     expect(events).toEqual(["checkout.completed"]);
+  });
+
+  // The webhook keeps only sales tagged as photo2pgn's (the Paddle account also sells other
+  // apps, 28 Nov): what the checkout really sends must come back through it as a record.
+  it("sends custom data the webhook records as photo2pgn's sale", async () => {
+    const { paddle } = fakePaddle();
+    await openCheckout(CREDIT_PACKS[1], { userId: "u1", email: "a@example.com" }, checkoutConfigFrom(FULL)!, { load: async () => paddle });
+    const sent = (paddle.Checkout.open as ReturnType<typeof vi.fn>).mock.calls[0][0] as { items: { priceId: string }[]; customData: Record<string, unknown> };
+    const body = JSON.stringify({
+      event_type: "transaction.completed",
+      data: { id: "txn_rt", customer_id: "ctm_1", subscription_id: null, currency_code: "USD", items: sent.items.map((i) => ({ price: { id: i.priceId } })), details: { totals: { grand_total: "1000" } }, custom_data: sent.customData },
+    });
+    const now = new Date("2026-11-28T12:00:00Z");
+    const secret = "pdl_ntfset_test";
+    const payments = memoryKV();
+    const res = await handlePaddleWebhook(
+      new Request("https://x/api/paddle-webhook", { method: "POST", body, headers: { "paddle-signature": await paddleSignature(body, secret, Math.floor(now.getTime() / 1000)) } }),
+      { config: paddleConfigFrom({ PGN_PADDLE_WEBHOOK_SECRET: secret, PGN_PADDLE_PRICE_PACK_20: "pri_20", PGN_PADDLE_PRICE_PACK_50: "pri_50" }), payments, now: () => now, clientIp: "34.237.3.244", allowedIps: async () => ["34.237.3.244/32"] },
+    );
+    expect(await res.json()).toEqual({ recorded: true });
+    expect((await payments.getJSON<Payment>("payment/txn_rt"))!.value).toMatchObject({ pack: "pack-50", credits: 50, userId: "u1", email: "a@example.com" });
   });
 
   it("leaves Paddle.js on live for a live token", async () => {

@@ -4,7 +4,7 @@
 // owed. Only Paddle's addresses (its /ips list) get in; the signature is
 // checked on the raw body before anything else is read.
 import type { KV } from "./kv";
-import { CREDIT_PACKS } from "../../src/lib/credits";
+import { CREDIT_PACKS, PADDLE_APP_TAG } from "../../src/lib/credits";
 
 export interface PaddleConfig {
   webhookSecret: string | null; // PGN_PADDLE_WEBHOOK_SECRET: the notification destination's secret, not the API key
@@ -108,9 +108,6 @@ export interface WebhookDeps extends PaddleDeps {
   allowedIps: () => Promise<string[] | null>;
 }
 
-/** The `custom_data.app` photo2pgn's own checkout gives its sales (src/lib/checkout.ts). */
-const OWN_APP = "photo2pgn";
-
 const reply = (status: number, body: object) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -153,7 +150,7 @@ export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Prom
   // every destination every event. A sale another app's checkout tagged is answered 200, so
   // Paddle stops retrying, and nothing of it is kept or echoed. An untagged sale is kept.
   const app = str(cd.app);
-  if (app && app !== OWN_APP) return reply(200, { ignored: true, reason: "other app" });
+  if (app && app !== PADDLE_APP_TAG) return reply(200, { ignored: true, reason: "other app" });
 
   const priceIds = (d.items ?? []).map((i) => i.price?.id).filter((x): x is string => Boolean(x));
   const pack = CREDIT_PACKS.find((p) => priceIds.includes(config.prices[p.id] ?? "\0")) ?? null;

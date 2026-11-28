@@ -2,6 +2,7 @@
 // the pack from the price id, the owner's list. No network.
 import { describe, expect, it } from "vitest";
 import { memoryKV } from "../netlify/lib/kv";
+import { paddleSignature } from "./helpers";
 import { PADDLE_IPS_URL, handlePaddleWebhook, handlePaymentGranted, handlePayments, inCidrs, paddleConfigFrom, paddleIps, validSignature, type Payment } from "../netlify/lib/paddle";
 
 const PADDLE_IP = "34.237.3.244";
@@ -11,11 +12,7 @@ const SECRET = "pdl_ntfset_test";
 const NOW = new Date("2026-11-15T12:00:00Z");
 const config = paddleConfigFrom({ PGN_PADDLE_WEBHOOK_SECRET: SECRET, PGN_PADDLE_PRICE_PACK_20: "pri_20", PGN_PADDLE_PRICE_PACK_50: "pri_50" });
 
-async function sign(body: string, ts = Math.floor(NOW.getTime() / 1000), secret = SECRET) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${ts}:${body}`)))].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `ts=${ts};h1=${mac}`;
-}
+const sign = (body: string, ts = Math.floor(NOW.getTime() / 1000), secret = SECRET) => paddleSignature(body, secret, ts);
 
 const txn = (id: string, price = "pri_50") =>
   JSON.stringify({

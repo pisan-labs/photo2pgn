@@ -25,3 +25,10 @@ export function packLabel(p: CreditPack): string {
 
 /** Days within which an unused pack is refunded in full. */
 export const REFUND_DAYS = 14;
+
+/**
+ * The `custom_data.app` the checkout gives photo2pgn's sales, and the one the
+ * webhook keeps: the Paddle account also sells other apps (28 Nov), which tag
+ * their own. One constant, so the two cannot drift apart.
+ */
+export const PADDLE_APP_TAG = "photo2pgn";
