@@ -115,7 +115,7 @@ describe("the list", () => {
     await put(payment("txn_done", { grantedAt: "2026-11-21T10:00:00.000Z" }));
     const r = await call();
     expect(ids(r.body)).toEqual(["txn_new", "txn_mid", "txn_old"]);
-    expect((r.body.payments as Payment[])[1]).toMatchObject({ pack: null, credits: null, userId: "u1", email: "kai@example.com" });
+    expect((r.body.payments as Payment[])[1]).toMatchObject({ pack: null, credits: null, userId: "u1", email: "kai@example.com", total: "1000", currency: "USD" }); // what was paid, for the panel
   });
 
   it("refuses other methods and routes", async () => {

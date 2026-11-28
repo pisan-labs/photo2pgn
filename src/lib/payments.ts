@@ -18,6 +18,9 @@ export interface OwedPayment {
   userId: string | null;
   /** That account's email, as the checkout carried it (custom_data.email). */
   email: string | null;
+  /** What was paid: Paddle's grand_total, in the currency's smallest unit ("1000" is US$10.00); null when the record did not keep it. */
+  total?: string | null;
+  currency?: string | null;
   completedAt: string;
   grantedAt: string | null;
   /** A grant from the panel began then and has not finished (or never will). */
@@ -122,6 +125,58 @@ export function packText(p: Pick<OwedPayment, "pack" | "credits">): string {
     return `${p.credits} credits${known ? ` (US$${known.priceUsd} pack)` : ""}`;
   }
   return "Not one of the packs";
+}
+
+/** What was paid, from the record: the amount in the currency's smallest unit, and how it reads. */
+export interface Paid {
+  minor: number;
+  currency: string;
+  text: string;
+}
+
+/** Digits after the point in a currency (2 for USD, 0 for JPY), as Paddle counts its smallest unit; a well-formed code Intl does not know gets 2. */
+const minorDigits = (currency: string): number => new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+
+/** "US$10.00", "9.20 EUR", or null when the record has no usable amount (an older record, or an odd one). */
+export function paidOf(p: Pick<OwedPayment, "total" | "currency">): Paid | null {
+  const total = typeof p.total === "number" ? String(p.total) : p.total;
+  if (typeof total !== "string" || !/^\d{1,15}$/.test(total) || typeof p.currency !== "string" || !/^[A-Z]{3}$/.test(p.currency)) return null;
+  const minor = Number(total);
+  const digits = minorDigits(p.currency);
+  const major = (minor / 10 ** digits).toFixed(digits);
+  return { minor, currency: p.currency, text: p.currency === "USD" ? `US$${major}` : `${major} ${p.currency}` };
+}
+
+/**
+ * What was paid against the pack's list price (CREDIT_PACKS, in US$, before
+ * the tax Paddle adds): at least the price, less (a discount, or a $0 test),
+ * or not known (not recorded, another currency, or a pack not in the list).
+ */
+export type PaidCheck = { kind: "full"; paid: Paid } | { kind: "less"; paid: Paid; list: string | null } | { kind: "unknown"; paid: Paid | null; list: string | null };
+
+export function paidCheck(p: Pick<OwedPayment, "pack" | "total" | "currency">): PaidCheck {
+  const paid = paidOf(p);
+  const pack = CREDIT_PACKS.find((c) => c.id === p.pack);
+  const list = pack ? `US$${Number.isInteger(pack.priceUsd) ? pack.priceUsd : pack.priceUsd.toFixed(2)}` : null;
+  if (paid && paid.minor === 0) return { kind: "less", paid, list };
+  if (!paid || !pack || paid.currency !== "USD") return { kind: "unknown", paid, list };
+  return paid.minor < Math.round(pack.priceUsd * 100) ? { kind: "less", paid, list } : { kind: "full", paid };
+}
+
+/** What a row says about the amount when the admin should look before granting; null when it is at least the list price. */
+export function paidWarning(c: PaidCheck): string | null {
+  if (c.kind === "full") return null;
+  const price = c.list ? `the pack's list price of ${c.list}` : "the pack's list price";
+  if (c.kind === "less") return `Paid ${c.paid.text}, less than ${price} (a discount, or a test). Check the sale in Paddle before granting the whole pack.`;
+  if (!c.paid) return "The amount paid was not recorded for this payment. Check it in Paddle before granting.";
+  return `Paid in ${c.paid.currency}, which cannot be compared with ${price} here. Check the sale in Paddle before granting.`;
+}
+
+/** The question "Grant and mark done" asks first when the amount is less than the list price or not known. */
+export function grantQuestion(p: Pick<OwedPayment, "credits">, c: PaidCheck): string {
+  const amount = c.paid ? `a payment of ${c.paid.text}` : "a payment whose amount was not recorded";
+  const list = c.kind !== "full" && c.list ? ` (the pack's list price is ${c.list})` : "";
+  return `Grant ${p.credits} credits for ${amount}${list}?`;
 }
 
 /** What "Grant and mark done" can do for a payment: grant, or why only "Mark done" is offered. */

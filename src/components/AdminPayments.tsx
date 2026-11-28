@@ -5,7 +5,18 @@
 // "Mark done" alone is for a sale with no pack, or one handled another way.
 import { useEffect, useRef, useState } from "react";
 import { shortWhen } from "../lib/grant";
-import { grantable, grantPayment, listOwedPayments, markPaymentDone, packText, type OwedPayment, type PaymentsDeps } from "../lib/payments";
+import {
+  grantable,
+  grantPayment,
+  grantQuestion,
+  listOwedPayments,
+  markPaymentDone,
+  packText,
+  paidCheck,
+  paidWarning,
+  type OwedPayment,
+  type PaymentsDeps,
+} from "../lib/payments";
 
 type ListState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; payments: OwedPayment[]; unreadable: number };
 
@@ -35,15 +46,17 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
   const [list, setList] = useState<ListState>({ kind: "loading" });
   const [reloads, setReloads] = useState(0);
   const [busy, setBusy] = useState<{ id: string; kind: "grant" | "mark" } | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // The row whose action waits for a yes: Mark done always, a grant when the amount paid is under the list price or not known.
+  const [confirming, setConfirming] = useState<{ id: string; kind: "grant" | "mark" } | null>(null);
   // Why the last action on a row did not go through, per row, until that row is acted on again.
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [markOnly, setMarkOnly] = useState<string[]>([]);
   const [notice, setNotice] = useState<{ text: string; warn?: boolean }>({ text: "" });
-  const [focusTo, setFocusTo] = useState<{ to: "notice" | "confirm" | "mark"; id?: string } | null>(null);
+  const [focusTo, setFocusTo] = useState<{ to: "notice" | "confirm" | "mark" | "grant"; id?: string } | null>(null);
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const markRefs = useRef(new Map<string, HTMLButtonElement>());
+  const grantRefs = useRef(new Map<string, HTMLButtonElement>());
 
   useEffect(() => {
     let live = true;
@@ -60,7 +73,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
     if (!focusTo) return;
     if (focusTo.to === "notice") noticeRef.current?.focus();
     else if (focusTo.to === "confirm") confirmRef.current?.focus();
-    else if (focusTo.id) markRefs.current.get(focusTo.id)?.focus();
+    else if (focusTo.id) (focusTo.to === "grant" ? grantRefs : markRefs).current.get(focusTo.id)?.focus();
   }, [focusTo]);
 
   const refresh = () => {
@@ -93,9 +106,16 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
     setFocusTo({ to: "mark", id });
   };
 
-  const cancelConfirm = (id: string) => {
+  const cancelConfirm = (id: string, kind: "grant" | "mark") => {
     setConfirming(null);
-    setFocusTo({ to: "mark", id });
+    setFocusTo({ to: kind, id });
+  };
+
+  const ask = (id: string, kind: "grant" | "mark") => {
+    if (busy) return;
+    setRowErrors((e) => withoutKey(e, id));
+    setConfirming({ id, kind });
+    setFocusTo({ to: "confirm" });
   };
 
   return (
@@ -155,10 +175,14 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
               const why = can.ok ? null : can.why;
               const summaryId = `payment-${i}-summary`;
               const mine = busy?.id === id;
+              const paid = paidCheck(p);
+              const paidNote = can.ok ? paidWarning(paid) : null;
+              const asking = confirming?.id === id ? confirming.kind : null;
               return (
                 <li key={id} className="payment" aria-busy={mine || undefined}>
                   <p className="payment-head" id={summaryId}>
                     <strong>{packText(p)}</strong> <span className="payment-when">{shortWhen(p.completedAt) || p.completedAt}</span>
+                    {paid.kind === "less" && <span className="payment-flag">Paid less than the list price</span>}
                     <span className="sr-only">, for {p.email ?? p.userId ?? "an account not named at checkout"}</span>
                   </p>
                   <dl className="payment-facts">
@@ -175,6 +199,8 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
                         "Not named at checkout"
                       )}
                     </dd>
+                    <dt>Paid</dt>
+                    <dd>{paid.paid ? paid.paid.text : "Amount not recorded"}</dd>
                     <dt>Paddle</dt>
                     <dd>
                       <span className="payment-id">{id}</span>
@@ -187,32 +213,43 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
                     </dd>
                   </dl>
                   {why && <p className="hint">{why}</p>}
+                  {paidNote && <p className="warn payment-warn">{paidNote}</p>}
                   {rowErrors[id] && (
                     <p className="error" role="alert">
                       {rowErrors[id]}
                     </p>
                   )}
-                  {confirming === id ? (
+                  {asking ? (
                     <div
                       className="row payment-confirm"
                       role="group"
-                      aria-label="Confirm Mark done"
+                      aria-label={asking === "grant" ? "Confirm Grant and mark done" : "Confirm Mark done"}
                       onKeyDown={(e) => {
-                        if (e.key === "Escape") cancelConfirm(id);
+                        if (e.key === "Escape") cancelConfirm(id, asking);
                       }}
                     >
-                      <span>Mark this payment done without adding credits here?</span>
-                      <button type="button" className="primary" ref={confirmRef} aria-disabled={busy !== null} aria-describedby={summaryId} onClick={() => void act(p, "mark")}>
-                        {mine && busy?.kind === "mark" ? "Marking…" : "Yes, mark done"}
+                      <span>{asking === "grant" ? grantQuestion(p, paid) : "Mark this payment done without adding credits here?"}</span>
+                      <button type="button" className="primary" ref={confirmRef} aria-disabled={busy !== null} aria-describedby={summaryId} onClick={() => void act(p, asking)}>
+                        {asking === "grant" ? (mine && busy?.kind === "grant" ? "Granting…" : "Yes, grant and mark done") : mine && busy?.kind === "mark" ? "Marking…" : "Yes, mark done"}
                       </button>
-                      <button type="button" className="secondary" onClick={() => cancelConfirm(id)}>
+                      <button type="button" className="secondary" onClick={() => cancelConfirm(id, asking)}>
                         Cancel
                       </button>
                     </div>
                   ) : (
                     <div className="row">
                       {grantOk && (
-                        <button type="button" className="primary" aria-disabled={busy !== null} aria-describedby={summaryId} onClick={() => void act(p, "grant")}>
+                        <button
+                          type="button"
+                          className="primary"
+                          aria-disabled={busy !== null}
+                          aria-describedby={summaryId}
+                          ref={(el) => {
+                            if (el) grantRefs.current.set(id, el);
+                            else grantRefs.current.delete(id);
+                          }}
+                          onClick={() => (paid.kind === "full" ? void act(p, "grant") : ask(id, "grant"))}
+                        >
                           {mine && busy?.kind === "grant" ? "Granting…" : "Grant and mark done"}
                         </button>
                       )}
@@ -225,12 +262,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
                           if (el) markRefs.current.set(id, el);
                           else markRefs.current.delete(id);
                         }}
-                        onClick={() => {
-                          if (busy) return;
-                          setRowErrors((e) => withoutKey(e, id));
-                          setConfirming(id);
-                          setFocusTo({ to: "confirm" });
-                        }}
+                        onClick={() => ask(id, "mark")}
                       >
                         Mark done
                       </button>

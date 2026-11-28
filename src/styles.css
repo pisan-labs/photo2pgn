@@ -1588,6 +1588,21 @@ a.button {
   margin: 0 0 8px;
 }
 
+/* Paid less than the pack's list price (a discount, a $0 test): marked so it is not granted by reflex. */
+.payment-flag {
+  color: var(--illegal-line);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.payment-warn {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
 .payment-confirm {
   padding: 8px;
   border-radius: 6px;

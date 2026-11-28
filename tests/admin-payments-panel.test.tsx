@@ -17,6 +17,8 @@ const owed = (id: string, partial: Partial<OwedPayment> = {}): OwedPayment => ({
   credits: 50,
   userId: "4b1c0d2e-0000-4000-8000-000000000001",
   email: "kai@example.com",
+  total: "1000",
+  currency: "USD",
   completedAt: "2026-11-28T10:00:00.000Z",
   grantedAt: null,
   ...partial,
@@ -127,6 +129,8 @@ describe("the list's states", () => {
     const [a, b, c] = rows();
     expect(text()).toContain("3 payments to grant.");
     expect(a.textContent).toContain("50 credits (US$10 pack)");
+    expect(a.textContent).toContain("PaidUS$10.00");
+    expect(a.textContent).not.toContain("less than the list price");
     expect(a.textContent).toContain("kai@example.com");
     expect(a.textContent).toContain("user id 4b1c0d2e-0000-4000-8000-000000000001");
     expect(a.textContent).toContain("txn_new");
@@ -290,6 +294,67 @@ describe("Grant and mark done", () => {
     await render(deps);
     expect(rows()[0].textContent).toMatch(/began \(.+\) and did not confirm, so the credits may or may not have been added\. Do not grant it again: check the account's balance/);
     expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
+  });
+});
+
+describe("what was paid", () => {
+  it("marks a payment under the list price, and asks before granting it, naming the amount", async () => {
+    const onGranted = vi.fn();
+    const { deps, calls } = server(
+      { status: 200, body: { payments: [owed("txn_free", { total: "0" }), owed("txn_full", { total: "1100" })] } },
+      { "/api/admin/payments/txn_free/grant": [{ status: 200, body: { email: "kai@example.com", balance: 50, credits: 50, already: false, grantedAt: "x" } }] },
+    );
+    await render(deps, onGranted);
+    const [free, full] = rows();
+    expect(free.querySelector(".payment-flag")?.textContent).toBe("Paid less than the list price");
+    expect(free.textContent).toContain("PaidUS$0.00");
+    expect(free.querySelector(".payment-warn")?.textContent).toBe("Paid US$0.00, less than the pack's list price of US$10 (a discount, or a test). Check the sale in Paddle before granting the whole pack.");
+    expect(full.querySelector(".payment-flag")).toBeNull();
+    expect(full.querySelector(".payment-warn")).toBeNull();
+
+    const grant = button("Grant and mark done", free);
+    await click(grant);
+    expect(calls.filter((c) => c.startsWith("POST"))).toEqual([]);
+    const group = rows()[0].querySelector('[role="group"]')!;
+    expect(group.getAttribute("aria-label")).toBe("Confirm Grant and mark done");
+    expect(group.textContent).toContain("Grant 50 credits for a payment of US$0.00 (the pack's list price is US$10)?");
+    expect(document.activeElement?.textContent).toBe("Yes, grant and mark done");
+    await press("Escape");
+    expect(document.activeElement?.textContent).toBe("Grant and mark done");
+    expect(document.activeElement).toBe(button("Grant and mark done", rows()[0]));
+    await click(button("Grant and mark done", rows()[0]));
+    await click(button("Cancel", rows()[0]));
+    expect(document.activeElement).toBe(button("Grant and mark done", rows()[0]));
+    expect(calls.filter((c) => c.startsWith("POST"))).toEqual([]);
+
+    await click(button("Grant and mark done", rows()[0]));
+    await click(button("Yes, grant and mark done"));
+    expect(calls.filter((c) => c.startsWith("POST"))).toEqual(["POST /api/admin/payments/txn_free/grant"]);
+    expect(rows()).toHaveLength(1);
+    expect(onGranted).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when the amount was not recorded, or cannot be compared, and asks before granting", async () => {
+    const { deps } = server({ status: 200, body: { payments: [owed("txn_old", { total: null, currency: null }), owed("txn_eur", { total: "920", currency: "EUR" })] } });
+    await render(deps);
+    const [old, eur] = rows();
+    expect(old.textContent).toContain("PaidAmount not recorded");
+    expect(old.querySelector(".payment-warn")?.textContent).toBe("The amount paid was not recorded for this payment. Check it in Paddle before granting.");
+    expect(eur.textContent).toContain("Paid9.20 EUR");
+    expect(eur.querySelector(".payment-warn")?.textContent).toMatch(/^Paid in EUR, which cannot be compared with the pack's list price of US\$10 here/);
+    expect(old.querySelector(".payment-flag")).toBeNull();
+    await click(button("Grant and mark done", old));
+    expect(rows()[0].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment whose amount was not recorded (the pack's list price is US$10)?");
+    await press("Escape");
+    await click(button("Grant and mark done", rows()[1]));
+    expect(rows()[1].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment of 9.20 EUR (the pack's list price is US$10)?");
+  });
+
+  it("does not warn about the amount on a row that cannot be granted from here", async () => {
+    const { deps } = server({ status: 200, body: { payments: [owed("txn_1", { pack: null, credits: null, total: "0" })] } });
+    await render(deps);
+    expect(rows()[0].querySelector(".payment-warn")).toBeNull();
+    expect(rows()[0].querySelector(".payment-flag")?.textContent).toBe("Paid less than the list price");
   });
 });
 

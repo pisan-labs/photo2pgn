@@ -1,7 +1,7 @@
 // The browser side of "Payments to grant": photo2pgn's own routes, with the
 // admin's sign-in token. No network: fetch is a fake.
 import { describe, expect, it, vi } from "vitest";
-import { grantPayment, grantable, listOwedPayments, markPaymentDone, packText, type OwedPayment } from "../src/lib/payments";
+import { grantPayment, grantQuestion, grantable, listOwedPayments, markPaymentDone, packText, paidCheck, paidOf, paidWarning, type OwedPayment } from "../src/lib/payments";
 
 const answer = (status: number, body: unknown) =>
   vi.fn(async (_u: string, _i?: RequestInit) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status }));
@@ -131,6 +131,43 @@ describe("markPaymentDone", () => {
     });
     expect(await markPaymentDone("txn_1", deps(answer(503, {})))).toMatchObject({ ok: false, message: "The payment was not marked done (HTTP 503). Try again." });
     expect(await markPaymentDone("txn_1", { getToken: async () => null })).toMatchObject({ ok: false, code: "sign_in" });
+  });
+});
+
+describe("what was paid", () => {
+  it("reads Paddle's total in the currency's smallest unit", () => {
+    expect(paidOf({ total: "1000", currency: "USD" })).toEqual({ minor: 1000, currency: "USD", text: "US$10.00" });
+    expect(paidOf({ total: "0", currency: "USD" })).toMatchObject({ minor: 0, text: "US$0.00" });
+    expect(paidOf({ total: "920", currency: "EUR" })).toMatchObject({ text: "9.20 EUR" });
+    expect(paidOf({ total: "1500", currency: "JPY" })).toMatchObject({ minor: 1500, text: "1500 JPY" });
+    expect(paidOf({ total: 1100 as unknown as string, currency: "USD" })).toMatchObject({ text: "US$11.00" });
+    for (const odd of [{ total: null, currency: null }, {}, { total: "10.00", currency: "USD" }, { total: "-5", currency: "USD" }, { total: "1000", currency: "usd" }, { total: "1000", currency: null }]) {
+      expect(paidOf(odd as OwedPayment)).toBeNull();
+    }
+  });
+
+  it("compares it with the pack's list price", () => {
+    expect(paidCheck(owed({ total: "1000", currency: "USD" }))).toMatchObject({ kind: "full" });
+    expect(paidCheck(owed({ total: "1100", currency: "USD" }))).toMatchObject({ kind: "full" }); // with the tax Paddle adds
+    expect(paidCheck(owed({ total: "999", currency: "USD" }))).toMatchObject({ kind: "less", list: "US$10" });
+    expect(paidCheck(owed({ pack: "pack-20", credits: 20, total: "0", currency: "USD" }))).toMatchObject({ kind: "less", list: "US$5", paid: { text: "US$0.00" } });
+    expect(paidCheck(owed({ total: "0", currency: "EUR" }))).toMatchObject({ kind: "less" });
+    expect(paidCheck(owed({ total: "2000", currency: "EUR" }))).toMatchObject({ kind: "unknown", list: "US$10" });
+    expect(paidCheck(owed({ total: null, currency: null }))).toEqual({ kind: "unknown", paid: null, list: "US$10" });
+    expect(paidCheck(owed({ pack: "pack-old", total: "1000", currency: "USD" }))).toEqual({ kind: "unknown", paid: expect.objectContaining({ text: "US$10.00" }), list: null });
+  });
+
+  it("says what to check, and asks with the amount paid", () => {
+    const at = (partial: Partial<OwedPayment>) => paidCheck(owed(partial));
+    expect(paidWarning(at({ total: "1000", currency: "USD" }))).toBeNull();
+    expect(paidWarning(at({ total: "0", currency: "USD" }))).toBe("Paid US$0.00, less than the pack's list price of US$10 (a discount, or a test). Check the sale in Paddle before granting the whole pack.");
+    expect(paidWarning(at({ pack: "pack-old", total: "0", currency: "USD" }))).toMatch(/less than the pack's list price \(a discount/);
+    expect(paidWarning(at({ total: null }))).toBe("The amount paid was not recorded for this payment. Check it in Paddle before granting.");
+    expect(paidWarning(at({ total: "920", currency: "EUR" }))).toBe("Paid in EUR, which cannot be compared with the pack's list price of US$10 here. Check the sale in Paddle before granting.");
+    expect(paidWarning(at({ pack: "pack-old", total: "920", currency: "EUR" }))).toMatch(/compared with the pack's list price here/);
+    expect(grantQuestion(owed(), at({ total: "500", currency: "USD" }))).toBe("Grant 50 credits for a payment of US$5.00 (the pack's list price is US$10)?");
+    expect(grantQuestion(owed(), at({ total: null }))).toBe("Grant 50 credits for a payment whose amount was not recorded (the pack's list price is US$10)?");
+    expect(grantQuestion(owed(), at({ total: "1000", currency: "USD" }))).toBe("Grant 50 credits for a payment of US$10.00?");
   });
 });
 
