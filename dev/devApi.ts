@@ -5,10 +5,11 @@
 // accepts the bearer token "dev" as one test user when PGN_DEV_USER is set.
 import type { Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadConfig } from "../netlify/lib/config";
+import { gatewayUrlOf, grantUrlOf, loadConfig } from "../netlify/lib/config";
 import { memoryKV } from "../netlify/lib/kv";
 import { supabaseVerifier, type UserVerifier } from "../netlify/lib/auth";
 import { handleConvert, handleJob, handleMyJobs, handleWorkerClaim, handleWorkerList, handleWorkerResult, type Deps } from "../netlify/lib/handlers";
+import { creditsGrantClient, gatewayAdminCheck, handleAdminPayments, type AdminPaymentsDeps } from "../netlify/lib/admin-payments";
 
 async function toRequest(req: IncomingMessage): Promise<Request> {
   const chunks: Buffer[] = [];
@@ -30,7 +31,7 @@ async function send(res: ServerResponse, r: Response) {
 }
 
 /** A Node request handler serving /api/* from the shared handlers. */
-export function apiListener(deps: Deps) {
+export function apiListener(deps: Deps, admin?: AdminPaymentsDeps) {
   return async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const url = req.url ?? "";
     if (!url.startsWith("/api/")) return next();
@@ -46,6 +47,7 @@ export function apiListener(deps: Deps) {
       const w = /^\/api\/worker\/jobs\/([^/]+)\/(claim|result)$/.exec(path);
       if (w && w[2] === "claim") return send(res, await handleWorkerClaim(request, decodeURIComponent(w[1]), deps));
       if (w && w[2] === "result") return send(res, await handleWorkerResult(request, decodeURIComponent(w[1]), deps));
+      if (admin && path.startsWith("/api/admin/payments")) return send(res, await handleAdminPayments(request, admin));
       res.statusCode = 404;
       res.end("not found");
     } catch (err) {
@@ -62,11 +64,17 @@ export function devApi(): Plugin {
   const real = supabaseVerifier(config.supabaseUrl, config.supabaseAnonKey);
   const verifyUser: UserVerifier = async (token) => (devUser && token === "dev" ? { id: devUser } : real(token));
   const deps: Deps = { config, jobs: memoryKV(), quota: memoryKV(), verifyUser };
+  // The admin panel's payments: an empty store here; admin is still the gateway's answer.
+  const admin: AdminPaymentsDeps = {
+    payments: memoryKV(),
+    isAdmin: gatewayAdminCheck(gatewayUrlOf(config)),
+    grant: creditsGrantClient(grantUrlOf(config)),
+  };
   return {
     name: "photo2pgn-dev-api",
     apply: "serve",
     configureServer(server) {
-      server.middlewares.use(apiListener(deps));
+      server.middlewares.use(apiListener(deps, admin));
     },
   };
 }

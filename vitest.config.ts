@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.{ts,tsx}"],
     // Coverage instrumentation slows the engine down about fourfold; speed
     // checks allow for it, and so does the time limit of every test.
     env: { PERF_FACTOR: process.argv.includes("--coverage") ? "4" : "1" },

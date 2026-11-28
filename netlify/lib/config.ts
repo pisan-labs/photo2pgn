@@ -40,6 +40,11 @@ export function gatewayUrlOf(config: Pick<AppConfig, "supabaseUrl">): string {
   return `${config.supabaseUrl.replace(/\/$/, "")}/functions/v1/llm-gateway`;
 }
 
+/** The platform's credits-grant function (admins add credits) for the configured Supabase project. */
+export function grantUrlOf(config: Pick<AppConfig, "supabaseUrl">): string {
+  return `${config.supabaseUrl.replace(/\/$/, "")}/functions/v1/credits-grant`;
+}
+
 function int(v: string | undefined, fallback: number): number {
   const n = Number.parseInt(v ?? "", 10);
   return Number.isFinite(n) && n >= 0 ? n : fallback;

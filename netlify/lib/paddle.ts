@@ -1,7 +1,8 @@
 // Paddle's webhook, as a record of what was bought. Nothing here grants
-// credits: the owner adds them by hand with the HintWise `credits-grant`
-// function (owner, 13 Nov), and GET /api/worker/payments lists what is still
-// owed. Only Paddle's addresses (its /ips list) get in; the signature is
+// credits: an admin adds them from the admin panel's "Payments to grant"
+// (admin-payments.ts, through the HintWise `credits-grant` function, since
+// 28 Nov), and GET /api/worker/payments still lists what is owed for the
+// owner's worker token. Only Paddle's addresses (its /ips list) get in; the signature is
 // checked on the raw body before anything else is read.
 import type { KV } from "./kv";
 import { CREDIT_PACKS, PADDLE_APP_TAG } from "../../src/lib/credits";
@@ -34,6 +35,10 @@ export interface Payment {
   currency: string | null;
   completedAt: string;
   grantedAt: string | null;
+  /** Admin panel: when a grant of this payment began (a claim, so it is not granted twice); null once it ended. */
+  grantStartedAt?: string | null;
+  /** Admin panel: the credits it added through credits-grant before marking the payment granted. */
+  grantedCredits?: number;
 }
 
 const TOLERANCE_S = 300;
@@ -176,14 +181,20 @@ export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Prom
   return reply(200, { recorded: created });
 }
 
+/** The payments bought and not yet marked as granted, in no particular order. */
+export async function openPayments(payments: KV): Promise<Payment[]> {
+  const out: Payment[] = [];
+  for (const key of await payments.list("payment/")) {
+    const p = await payments.getJSON<Payment>(key);
+    if (p && !p.value.grantedAt) out.push(p.value);
+  }
+  return out;
+}
+
 /** GET /api/worker/payments (owner's token): bought and not yet marked as granted. */
 export async function handlePayments(owner: boolean, deps: PaddleDeps): Promise<Response> {
   if (!owner) return reply(401, { error: "unauthorized" });
-  const out: Payment[] = [];
-  for (const key of await deps.payments.list("payment/")) {
-    const p = await deps.payments.getJSON<Payment>(key);
-    if (p && !p.value.grantedAt) out.push(p.value);
-  }
+  const out = await openPayments(deps.payments);
   out.sort((a, b) => a.completedAt.localeCompare(b.completedAt));
   return reply(200, { payments: out });
 }
