@@ -145,18 +145,23 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
                       {p.email ? (
                         <>
                           <span className="payment-email">{p.email}</span>
-                          {p.userId && <span className="hint"> user id {p.userId}</span>}
+                          {p.userId && <span className="hint"> user id <span className="payment-id">{p.userId}</span></span>}
                         </>
                       ) : p.userId ? (
-                        <>user id {p.userId}</>
+                        <>user id <span className="payment-id">{p.userId}</span></>
                       ) : (
                         "Not named at checkout"
                       )}
                     </dd>
                     <dt>Paddle</dt>
                     <dd>
-                      {id}
-                      {p.customerId && <span className="hint"> customer {p.customerId}</span>}
+                      <span className="payment-id">{id}</span>
+                      {p.customerId && (
+                        <span className="hint">
+                          {" "}
+                          customer <span className="payment-id">{p.customerId}</span>
+                        </span>
+                      )}
                     </dd>
                   </dl>
                   {why && <p className="hint">{why}</p>}

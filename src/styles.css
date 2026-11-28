@@ -1578,6 +1578,12 @@ a.button {
   font-weight: 600;
 }
 
+/* Paddle and account ids in the code font: some text fonts draw the x in "4x3" as a times sign. */
+.payment-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
 .payment .error {
   margin: 0 0 8px;
 }
