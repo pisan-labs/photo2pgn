@@ -114,6 +114,7 @@ const reply = (status: number, body: object) =>
 interface TxnData {
   id?: string;
   customer_id?: string | null;
+  subscription_id?: string | null;
   currency_code?: string;
   custom_data?: Record<string, unknown> | null;
   items?: { price?: { id?: string } }[];
@@ -147,10 +148,13 @@ export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Prom
   const cd = d.custom_data ?? {};
   const str = (v: unknown) => (typeof v === "string" && v ? v : null);
   // The Paddle account also sells mychessmaster.net memberships (28 Nov), and Paddle sends
-  // every destination every event. A sale another app's checkout tagged is answered 200, so
-  // Paddle stops retrying, and nothing of it is kept or echoed. An untagged sale is kept.
+  // every destination every event. Another app's sale is answered 200, so Paddle stops
+  // retrying, and nothing of it is kept or echoed: one another checkout tagged, or an untagged
+  // one made for a subscription (photo2pgn sells only one-time packs; mychessmaster.net's
+  // payment-method change is a subscription transaction with no custom data). A photo2pgn tag
+  // always keeps the sale, and an untagged one-time sale is kept as before.
   const app = str(cd.app);
-  if (app && app !== PADDLE_APP_TAG) return reply(200, { ignored: true, reason: "other app" });
+  if (app !== PADDLE_APP_TAG && (app || str(d.subscription_id))) return reply(200, { ignored: true, reason: "other app" });
 
   const priceIds = (d.items ?? []).map((i) => i.price?.id).filter((x): x is string => Boolean(x));
   const pack = CREDIT_PACKS.find((p) => priceIds.includes(config.prices[p.id] ?? "\0")) ?? null;
