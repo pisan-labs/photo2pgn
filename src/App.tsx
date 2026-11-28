@@ -301,31 +301,35 @@ export default function App() {
             <small>Scoresheet photos to PGN files</small>
           </span>
         </a>
-        {/* Signed out, the first step offers the sign-in; signed in: who, and Sign out.
-            The name opens the account panel (Delete my account). */}
-        {user && (
-          <span className="row account">
-            <button
-              type="button"
-              className="link account-name"
-              onClick={() => setSignInOpen((o) => !o)}
-              aria-expanded={signInOpen}
-              title="Your account"
-            >
-              {displayName(user)}
-            </button>
-            <button
-              type="button"
-              className="secondary small"
-              onClick={() => {
-                setSignInOpen(false);
-                void signOut();
-              }}
-            >
-              Sign out
-            </button>
-          </span>
-        )}
+        <div className="top-end">
+          {/* Signed out, the first step offers the sign-in; signed in: who, and Sign out.
+              The name opens the account panel (Delete my account). */}
+          {user && (
+            <span className="row account">
+              <button
+                type="button"
+                className="link account-name"
+                onClick={() => setSignInOpen((o) => !o)}
+                aria-expanded={signInOpen}
+                title="Your account"
+              >
+                {displayName(user)}
+              </button>
+              <button
+                type="button"
+                className="secondary small"
+                onClick={() => {
+                  setSignInOpen(false);
+                  void signOut();
+                }}
+              >
+                Sign out
+              </button>
+            </span>
+          )}
+          {/* The light and dark mode switch, last in the header. */}
+          <hw-theme-toggle />
+        </div>
       </header>
       <SignInPanel open={signInOpen} signedIn={Boolean(user)} onClose={() => setSignInOpen(false)} />
 

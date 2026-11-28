@@ -19,5 +19,6 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },
-  { ignores: ["dist/**", "coverage/**", "node_modules/**", "playwright-report/**", "test-results/**", ".netlify/**"] },
+  // The light and dark mode switch is a copy, checked byte for byte (tests/theme.test.ts), not this app's code.
+  { ignores: ["dist/**", "coverage/**", "node_modules/**", "playwright-report/**", "test-results/**", ".netlify/**", "src/lib/hw-theme.js", "public/hw-theme.js"] },
 );

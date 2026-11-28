@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Light and dark mode: sets data-theme on <html> before the first paint (claude-built-apps platform/src/theme/theme-init.js, unchanged; tests/theme.test.ts pins it) -->
+    <script>(function(){var t;try{t=localStorage.getItem('hw-theme')}catch{}if(t!=='light'&&t!=='dark')t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t)})();</script>
     <meta name="description" content="Turn a photo of a handwritten chess tournament scoresheet into a PGN file." />
     <meta name="theme-color" content="#1f3a5f" />
     <link rel="manifest" href="/manifest.webmanifest" />

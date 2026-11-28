@@ -25,7 +25,32 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
+/* The dark set, twice and the same: for the light and dark mode switch's choice (data-theme on <html>, set
+   before the first paint by the head snippet) and, until there is one, for the device's setting. Both are
+   for screens only, so paper gets the light set. */
+@media screen {
+  :root[data-theme="dark"] {
+    --bg: #14171c;
+    --panel: #1c2128;
+    --text: #e7e9ec;
+    --muted: #a0a8b3;
+    --line: #333a44;
+    --brand: #3d6ea8;
+    --accent: #7fb0ec;
+    --focus: #7fb0ec;
+    --unsure-bg: #1d2c40;
+    --unsure-line: #6d9fdc;
+    --fixed-bg: #3a2f14;
+    --fixed-line: #e0a63a;
+    --illegal-bg: #45201c;
+    --illegal-line: #ee6b5d;
+    --unchecked: #6b737e;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #14171c;
     --panel: #1c2128;
@@ -87,6 +112,21 @@ code {
   align-items: center;
   justify-content: space-between;
   padding: 16px 0;
+}
+
+/* The account (when signed in), then the light and dark mode switch, at the end of the header. */
+.top-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+hw-theme-toggle:not([hidden]) {
+  display: inline-flex;
+  flex: none;
+  width: var(--hw-theme-toggle-size, 44px);
+  height: var(--hw-theme-toggle-size, 44px);
 }
 
 .brand {
@@ -1670,4 +1710,15 @@ button.big {
 
 .install-link {
   overflow-wrap: anywhere;
+}
+
+@media print {
+  hw-theme-toggle {
+    display: none !important;
+  }
+
+  /* Paper drops the fill unless told: a filled button's label takes the ink. */
+  button:not(.secondary):not(.link) {
+    color: var(--text);
+  }
 }

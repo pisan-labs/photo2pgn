@@ -145,3 +145,5 @@
 2026-11-26 [note] Correction to the 2026-11-23 line: the branch merged as PR #7 was analytics-merge (71dc723), not analytics-on-main
 
 2026-11-26 [doc] privacy.html, review r1: the salt changes each UTC day, serves every HintWise app, goes at a later UTC day's first visit; redaction only as far as the script can tell; the export's demo flag named
+
+2026-11-28 [code] Light and dark mode switch (claude-built-apps platform/src/theme, copied unchanged): at the end of the app's header and beside the way back on the terms, refund and privacy pages; the dark styles follow it, on screens only.
