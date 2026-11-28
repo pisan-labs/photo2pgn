@@ -42,8 +42,9 @@ function setup(opts: { grant?: CreditsGrant; payments?: KV; now?: () => Date } =
   const isAdmin = vi.fn<AdminCheck>(async (token) => admins[token] ?? "signed_out");
   const grant = vi.fn<CreditsGrant>(opts.grant ?? (async (_t, g) => ({ ok: true, email: g.email, balance: 62 })));
   const deps: AdminPaymentsDeps = { payments, isAdmin, grant, now: opts.now ?? (() => NOW) };
-  const call = async (path = "", method = "GET", token: string | null = "admin-tok") => {
+  const call = async (path = "", method = "GET", token: string | null = "admin-tok", zone?: string) => {
     const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
+    if (zone !== undefined) headers["x-time-zone"] = zone;
     const res = await handleAdminPayments(new Request(`${BASE}${path}`, { method, headers }), deps);
     return { status: res.status, body: (await res.json()) as Record<string, unknown> & { error?: { code: string; message: string } } };
   };
@@ -187,7 +188,9 @@ describe("grant and mark done", () => {
       expect(r.status).toBe(502);
       expect(r.body.error?.code).toBe(code);
       expect(r.body.error?.message).toMatch(message);
-      expect(r.body.error?.message).toMatch(/Do not grant this payment again\. After 28 Nov 2026, 18:02 UTC, check the balance of kai@example\.com.*add the 50 credits by hand.*only if they are missing, then Mark done/);
+      expect(r.body.error?.message).toMatch(
+        /Do not grant this payment again, and wait until Sat, Nov 28, 6:02 PM UTC before checking the balance of kai@example\.com \(Check balance\); then add the 50 credits by hand \(Admin: add credits\) only if they are missing, and Mark done\.$/,
+      );
       expect(await get("txn_1")).toMatchObject({ grantedAt: null, grantStartedAt: NOW.toISOString() }); // the claim stays
       expect(ids((await call()).body)).toEqual(["txn_1"]);
       expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("busy");
@@ -272,6 +275,39 @@ describe("grant and mark done", () => {
     expect((await call("/nope/grant", "POST")).status).toBe(404);
   });
 
+  it("tells a second click when the grant under way will have landed, before anything is checked or added by hand", async () => {
+    const { call, put } = setup();
+    await put(payment("txn_1", { grantStartedAt: new Date(NOW.getTime() - 30_000).toISOString() }));
+    expect((await call("/txn_1/grant", "POST")).body.error).toEqual({
+      code: "busy",
+      message:
+        "This payment is being granted right now (in another tab, or by another admin), since Sat, Nov 28, 5:59 PM UTC. Do not grant it again, and wait until Sat, Nov 28, 6:01 PM UTC before checking the balance or adding credits by hand; then refresh the list and follow what the row says.",
+    });
+  });
+
+  it("gives every time in the admin's own time zone, named, as the panel does", async () => {
+    let now = NOW;
+    const { call, put } = setup({ grant: async () => ({ ok: false, code: "unreachable", status: null }), now: () => now });
+    await put(payment("txn_1"));
+    const r = await call("/txn_1/grant", "POST", "admin-tok", "America/Los_Angeles");
+    expect(r.body.error?.message).toMatch(/wait until Sat, Nov 28, 10:02 AM PST before checking the balance/);
+    expect((await call("/txn_1/grant", "POST", "admin-tok", "Europe/London")).body.error?.message).toMatch(/since Sat, Nov 28, 6:00 PM GMT\. .*wait until Sat, Nov 28, 6:02 PM GMT/);
+    expect((await call("/txn_1/granted", "POST", "admin-tok", "Asia/Kolkata")).body.error?.message).toMatch(/started at Sat, Nov 28, 11:30 PM GMT\+5:30 .*before Sat, Nov 28, 11:32 PM GMT\+5:30/);
+    // A zone it does not know, or none, is UTC, still named.
+    for (const zone of ["Not/AZone", "", "x".repeat(100)]) {
+      expect((await call("/txn_1/granted", "POST", "admin-tok", zone)).body.error?.message).toMatch(/started at Sat, Nov 28, 6:00 PM UTC/);
+    }
+    now = new Date(NOW.getTime() + GRANT_CLAIM_MS);
+    expect((await call("/txn_1/grant", "POST", "admin-tok", "America/New_York")).body.error?.message).toMatch(/started at Sat, Nov 28, 1:00 PM EST and did not finish by Sat, Nov 28, 1:02 PM EST/);
+  });
+
+  it("still answers a claim whose time cannot be read as a grant that did not finish", async () => {
+    const { call, put, grant } = setup();
+    await put(payment("txn_1", { grantStartedAt: "not a date" }));
+    expect((await call("/txn_1/grant", "POST")).body.error).toMatchObject({ code: "unfinished", message: expect.stringMatching(/^A grant of this payment started at not a date and did not finish, so/) });
+    expect(grant).not.toHaveBeenCalled();
+  });
+
   it("grants once when two clicks arrive together", async () => {
     let release: (v: GrantOutcome) => void = () => undefined;
     const { call, put, grant } = setup({ grant: () => new Promise<GrantOutcome>((r) => (release = r)) });
@@ -294,7 +330,10 @@ describe("grant and mark done", () => {
     now = new Date(NOW.getTime() + GRANT_CLAIM_MS);
     const r = await call("/txn_1/grant", "POST");
     expect(r.status).toBe(409);
-    expect(r.body.error).toMatchObject({ code: "unfinished", message: expect.stringMatching(/28 Nov 2026, 17:59 UTC.*may or may not.*Check the balance of kai@example.com/) });
+    expect(r.body.error).toMatchObject({
+      code: "unfinished",
+      message: expect.stringMatching(/started at Sat, Nov 28, 5:59 PM UTC and did not finish by Sat, Nov 28, 6:01 PM UTC, so the credits may or may not have been added\. Do not grant it again: check the balance of kai@example\.com/),
+    });
     expect(grant).not.toHaveBeenCalled();
     expect((await call("/txn_1/granted", "POST")).status).toBe(200);
     expect(await get("txn_1")).toMatchObject({ grantedAt: now.toISOString(), grantStartedAt: null });
@@ -327,7 +366,7 @@ describe("grant and mark done", () => {
     const r = await call("/txn_1/grant", "POST");
     expect(r.status).toBe(500);
     expect(r.body).toMatchObject({
-      error: { code: "not_marked", message: expect.stringMatching(/were added to kai@example.com \(balance now 62\).*Do not grant it again; press Mark done after 28 Nov 2026, 18:02 UTC/) },
+      error: { code: "not_marked", message: expect.stringMatching(/were added to kai@example.com \(balance now 62\).*Do not grant it again; press Mark done after Sat, Nov 28, 6:02 PM UTC\.$/) },
       credits: 50,
     });
     expect(ids((await call()).body)).toEqual(["txn_1"]); // visible, not lost
@@ -340,23 +379,58 @@ describe("grant and mark done", () => {
     quiet.mockRestore();
   });
 
-  it("keeps the claim when giving it back fails after a refused grant", async () => {
-    const kv = memoryKV();
+  it("keeps the claim when giving it back fails after a refused grant, and then says Mark done only, never retry", async () => {
     const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    let writes = 0;
-    const flaky: KV = {
-      ...kv,
-      setJSON: async (k, v, c) => {
-        if (c?.onlyIfMatch && ++writes > 1) throw new Error("blobs down");
-        return kv.setJSON(k, v, c);
-      },
-    };
-    const { call, put, get } = setup({ payments: flaky, grant: async () => ({ ok: false, code: "request", status: 400 }) });
-    await put(payment("txn_1"));
-    expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("grant_refused");
-    expect((await get("txn_1"))?.grantStartedAt).toBe(NOW.toISOString());
+    const cases: [GrantOutcome, number, RegExp][] = [
+      [{ ok: false, code: "signed_out", status: 401 }, 401, /^Your sign-in has run out, so no credits were added\. .*only Mark done is offered for it: sign in again, add the 50 credits by hand/],
+      [{ ok: false, code: "admin", status: 403 }, 403, /^HintWise says your account is not an admin, so no credits were added\. .*an admin can add the 50 credits by hand/],
+      [{ ok: false, code: "not_found", status: 404 }, 409, /^No HintWise account has the email kai@example\.com, so no credits were added\. .*add the credits by hand to the buyer's account/],
+      [{ ok: false, code: "request", status: 400 }, 502, /^HintWise turned the grant down: it does not take kai@example\.com with 50 credits\. No credits were added\. /],
+      [{ ok: false, code: "refused", status: 400 }, 502, /^HintWise refused the grant \(HTTP 400\), so no credits were added\. .*add the 50 credits by hand/],
+    ];
+    for (const [outcome, status, message] of cases) {
+      // The release write throws, or loses to another write: either way the claim is not given back.
+      for (const lose of [() => Promise.reject(new Error("blobs down")), () => Promise.resolve(false)]) {
+        const kv = memoryKV();
+        let writes = 0;
+        const flaky: KV = { ...kv, setJSON: async (k, v, c) => (c?.onlyIfMatch && ++writes > 1 ? lose() : kv.setJSON(k, v, c)) };
+        let now = NOW;
+        const { call, put, get, grant } = setup({ payments: flaky, grant: async () => outcome, now: () => now });
+        await put(payment("txn_1"));
+        const r = await call("/txn_1/grant", "POST");
+        expect(r.status).toBe(status);
+        expect(r.body.error?.code).toBe("claim_kept");
+        expect(r.body.error?.message).toMatch(message);
+        expect(r.body.error?.message).toMatch(/The payment could not be reopened for another grant, so only Mark done is offered for it: .*, then press Mark done after Sat, Nov 28, 6:02 PM UTC\.$/);
+        expect(r.body.error?.message).not.toMatch(/retry|still open/i);
+        expect((await get("txn_1"))?.grantStartedAt).toBe(NOW.toISOString());
+        expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("busy");
+        expect((await call("/txn_1/granted", "POST")).body.error?.code).toBe("grant_running");
+        now = new Date(NOW.getTime() + GRANT_CLAIM_MS);
+        expect((await call("/txn_1/granted", "POST")).body.error?.code).not.toBe("grant_running"); // Mark done at the time it named
+        expect(grant).toHaveBeenCalledTimes(1);
+      }
+    }
     expect(quiet).toHaveBeenCalled();
     quiet.mockRestore();
+  });
+
+  it("words a 400 other than credits-grant's own request error as a plain refusal, not a problem with the email", async () => {
+    for (const body of ["", JSON.stringify({ error: "below_zero" }), JSON.stringify({ message: "Bad Request" })]) {
+      const client = creditsGrantClient("https://auth.test/functions/v1/credits-grant", (async () => new Response(body, { status: 400 })) as unknown as typeof fetch);
+      const { call, put, get } = setup({ grant: client });
+      await put(payment("txn_1"));
+      const r = await call("/txn_1/grant", "POST");
+      expect(r.body.error).toEqual({
+        code: "grant_refused",
+        message: "HintWise refused the grant (HTTP 400), so no credits were added. The payment is still open. Add them by hand (Admin: add credits), then Mark done.",
+      });
+      expect((await get("txn_1"))?.grantStartedAt).toBeNull(); // still given back: credits-grant wrote nothing
+    }
+    const own = creditsGrantClient("https://auth.test/functions/v1/credits-grant", (async () => new Response(JSON.stringify({ error: "request" }), { status: 400 })) as unknown as typeof fetch);
+    const { call, put } = setup({ grant: own });
+    await put(payment("txn_1"));
+    expect((await call("/txn_1/grant", "POST")).body.error?.message).toMatch(/^HintWise turned the grant down: it does not take kai@example\.com with 50 credits\./);
   });
 });
 
@@ -507,7 +581,10 @@ describe("mark done while a grant runs", () => {
     await put(payment("txn_1", { grantStartedAt: new Date(NOW.getTime() - 30_000).toISOString() }));
     const r = await call("/txn_1/granted", "POST");
     expect(r.status).toBe(409);
-    expect(r.body.error).toMatchObject({ code: "grant_running", message: expect.stringMatching(/started at 28 Nov 2026, 17:59 UTC and may still be running.*before 28 Nov 2026, 18:01 UTC.*check the account's balance/) });
+    expect(r.body.error).toMatchObject({
+      code: "grant_running",
+      message: expect.stringMatching(/started at Sat, Nov 28, 5:59 PM UTC and may still be running, so it cannot be marked done before Sat, Nov 28, 6:01 PM UTC\. Do not grant it again, and wait until then before checking the account's balance/),
+    });
     expect((await get("txn_1"))?.grantedAt).toBeNull();
     now = new Date(NOW.getTime() + 90_000);
     expect((await call("/txn_1/granted", "POST")).status).toBe(200);
@@ -650,7 +727,9 @@ describe("the credits-grant client", () => {
       [404, { error: "not_found" }, "not_found"],
       [404, { code: "NOT_FOUND", message: "Requested function was not found" }, "refused"],
       [400, { error: "request" }, "request"],
-      [400, { error: "below_zero" }, "request"],
+      [400, { error: "below_zero" }, "refused"], // a positive grant cannot take a balance below zero: not "this email with these credits"
+      [400, "", "refused"], // Supabase's own layer
+      [400, { error: "other" }, "refused"],
       [500, { error: "database" }, "failed"], // also what a lost answer from a committed call looks like
       [500, { error: "admin" }, "failed"],
       [502, "bad gateway", "failed"],

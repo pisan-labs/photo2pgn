@@ -4,7 +4,7 @@
 // marks the payment done (photo2pgn's server does both, in that order);
 // "Mark done" alone is for a sale with no pack, or one handled another way.
 import { useEffect, useRef, useState } from "react";
-import { shortWhen } from "../lib/grant";
+import { clockTime } from "../lib/claim";
 import {
   grantable,
   grantPayment,
@@ -40,6 +40,7 @@ const MARK_ONLY = new Set([
   "unguarded",
   "busy",
   "grant_running",
+  "claim_kept",
 ]);
 
 export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGranted?: () => void }) {
@@ -123,7 +124,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
       <h2 id="admin-payments-title">Payments to grant</h2>
       <p className="hint">
         Sales of Photo to PGN credits through Paddle that are not marked done yet, newest first. &ldquo;Grant and mark done&rdquo; adds the pack&rsquo;s credits to
-        the account that paid, then marks the payment done.
+        the account the checkout named, then marks the payment done.
       </p>
       <div className="row payments-tools">
         <button
@@ -170,18 +171,18 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
           <ul className="payments">
             {list.payments.map((p, i) => {
               const id = p.transactionId;
-              const can = grantable(p);
+              const can = grantable(p, { now: deps?.now?.(), zone: deps?.zone });
               const grantOk = can.ok && !markOnly.includes(id);
               const why = can.ok ? null : can.why;
               const summaryId = `payment-${i}-summary`;
               const mine = busy?.id === id;
               const paid = paidCheck(p);
-              const paidNote = can.ok ? paidWarning(paid) : null;
+              const paidNote = grantOk ? paidWarning(paid) : null;
               const asking = confirming?.id === id ? confirming.kind : null;
               return (
                 <li key={id} className="payment" aria-busy={mine || undefined}>
                   <p className="payment-head" id={summaryId}>
-                    <strong>{packText(p)}</strong> <span className="payment-when">{shortWhen(p.completedAt) || p.completedAt}</span>
+                    <strong>{packText(p)}</strong> <span className="payment-when">{clockTime(p.completedAt, deps?.zone) || p.completedAt}</span>
                     {paid.kind === "less" && <span className="payment-flag">Paid less than the list price</span>}
                     <span className="sr-only">, for {p.email ?? p.userId ?? "an account not named at checkout"}</span>
                   </p>

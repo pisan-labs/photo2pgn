@@ -17,11 +17,16 @@
 // (review r1, RPP.1-1); after any answer that leaves it unclear the claim
 // stays, and only "Mark done" is offered, after checking the balance. A
 // record with no etag is never claimed (the claim would be an unconditional
-// write), and Mark done waits while a claim is young.
+// write), and Mark done waits while a claim is young. Every message about a
+// grant whose outcome is not known names the time to wait until before
+// checking the balance (review r2, RPP.2-1), in the time zone the panel sends.
 import type { KV, Versioned } from "./kv";
 import { APP } from "./gateway";
 import type { Payment } from "./paddle";
 import { isAllowance } from "../../src/lib/balance";
+import { GRANT_CLAIM_MS, TIME_ZONE_HEADER, claimEnd, clockTime, zoneOrUtc } from "../../src/lib/claim";
+
+export { GRANT_CLAIM_MS };
 
 /** What the gateway says about the caller: an admin, signed in but not an admin, signed out, or it could not be asked. */
 export type AdminStatus = "admin" | "not_admin" | "signed_out" | "unreachable";
@@ -88,6 +93,8 @@ export function creditsGrantClient(url: string, doFetch: typeof fetch = fetch): 
     }
     const data = (await res.json().catch(() => ({}))) as { email?: unknown; balance?: unknown; error?: unknown };
     if (res.ok && typeof data.balance === "number") return { ok: true, email: typeof data.email === "string" ? data.email : grant.email, balance: data.balance };
+    // Only credits-grant's own `request` (it could not take the email or the number) says what was wrong;
+    // any other 400 (below_zero, or Supabase's own layer) is worded as a plain refusal (review r2, RPP.2-3).
     const code: GrantFailure =
       res.status === 401
         ? "signed_out"
@@ -95,7 +102,7 @@ export function creditsGrantClient(url: string, doFetch: typeof fetch = fetch): 
           ? "admin"
           : res.status === 404 && data.error === "not_found"
             ? "not_found"
-            : res.status === 400
+            : res.status === 400 && data.error === "request"
               ? "request"
               : REFUSED_STATUSES.includes(res.status)
                 ? "refused"
@@ -111,9 +118,6 @@ export interface AdminPaymentsDeps {
   now?: () => Date;
 }
 
-/** A grant claim younger than this is a grant under way; an older one never finished. */
-export const GRANT_CLAIM_MS = 2 * 60_000;
-
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 }
@@ -123,13 +127,9 @@ const bearer = (req: Request) => {
   return auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 };
 const keyOf = (id: string) => `payment/${id}`;
-/** "28 Nov 2026, 17:50 UTC": the server does not know the admin's time zone. */
-const utc = (iso: string) => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : `${d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" })} UTC`;
-};
+/** How a message gives a time: "Sat, Nov 28, 10:02 AM PST", in the zone the panel sent (UTC when it sent none), as the panel itself does. */
+type When = (iso: string) => string;
+const whenIn = (zone: string): When => (iso) => clockTime(iso, zone) || iso;
 
 /** The caller's token when the gateway says they are a HintWise admin; otherwise the answer to send. */
 async function admitted(req: Request, deps: AdminPaymentsDeps): Promise<{ token: string } | Response> {
@@ -145,7 +145,7 @@ async function admitted(req: Request, deps: AdminPaymentsDeps): Promise<{ token:
 /** A claim younger than GRANT_CLAIM_MS: the grant that took it may still be running. */
 const live = (claim: string, now: Date) => now.getTime() - Date.parse(claim) < GRANT_CLAIM_MS;
 /** When a claim stops being young: after that, anything its grant did has landed. */
-const claimEnds = (claim: string) => utc(new Date(Date.parse(claim) + GRANT_CLAIM_MS).toISOString());
+const claimEnds = (claim: string, at: When) => at(claimEnd(claim) ?? claim);
 const STORE_DOWN = (what: string) => `Could not ${what} the payment store just now, so nothing was granted or marked. Try again in a minute.`;
 
 type Marked = { grantedAt: string; already: boolean } | { claimedAt: string } | null;
@@ -175,47 +175,56 @@ async function markGranted(kv: KV, id: string, now: Date, opts: { claim?: string
   return null;
 }
 
-/** Take back a claim after credits-grant refused the grant (nothing was written), so it can be tried again. */
-async function releaseClaim(kv: KV, id: string, claim: string): Promise<void> {
+/** Take back a claim after credits-grant refused the grant (nothing was written), so it can be tried again; whether it was taken back. */
+async function releaseClaim(kv: KV, id: string, claim: string): Promise<boolean> {
   try {
     const cur = await kv.getJSON<Payment>(keyOf(id));
     if (cur?.etag && !cur.value.grantedAt && cur.value.grantStartedAt === claim) {
-      await kv.setJSON(keyOf(id), { ...cur.value, grantStartedAt: null }, { onlyIfMatch: cur.etag });
+      return await kv.setJSON(keyOf(id), { ...cur.value, grantStartedAt: null }, { onlyIfMatch: cur.etag });
     }
   } catch (err) {
     console.error("admin-payments: could not release the claim", id, err instanceof Error ? err.message : err);
   }
+  return false;
 }
 
-function grantFailure(r: Extract<GrantOutcome, { ok: false }>, p: Payment, claim: string): Response {
-  const still = "The payment is still open.";
-  // The claim stays: the payment is never offered for a grant again, only Mark done once the balance is checked.
-  const unknown = `Do not grant this payment again. After ${claimEnds(claim)}, check the balance of ${p.email} (Check balance): add the ${p.credits} credits by hand (Admin: add credits) only if they are missing, then Mark done.`;
-  switch (r.code) {
-    case "signed_out":
-      return fail(401, "sign_in", `Your sign-in has run out, so no credits were added. ${still} Sign in again and retry.`);
-    case "admin":
-      return fail(403, "admin", `HintWise says your account is not an admin, so no credits were added. ${still}`);
-    case "not_found":
-      return fail(
-        409,
-        "no_account",
-        `No HintWise account has the email ${p.email}, so no credits were added. ${still} Add the credits by hand to the buyer's account (Admin: add credits), then Mark done.`,
-      );
-    case "request":
-      return fail(
-        502,
-        "grant_refused",
-        `HintWise turned the grant down: it does not take ${p.email} with ${p.credits} credits. No credits were added. ${still} Add them by hand (Admin: add credits), then Mark done.`,
-      );
-    case "refused":
-      return fail(502, "grant_refused", `HintWise refused the grant (HTTP ${r.status}), so no credits were added. ${still} Add them by hand (Admin: add credits), then Mark done.`);
-    case "unreachable":
-      return fail(502, "grant_unreachable", `The connection to HintWise failed while the grant was being sent, so the credits may or may not have been added. ${unknown}`);
-    default:
-      // A server error or an answer without a balance: the grant may have gone in before the answer was lost.
-      return fail(502, "grant_unclear", `HintWise did not confirm the grant${r.status ? ` (HTTP ${r.status})` : ""}, so the credits may or may not have been added. ${unknown}`);
+/**
+ * credits-grant refused, so no credits were added. With the claim given back
+ * the payment is open for another try; when it could not be given back
+ * (`kept`, the claim's time) only Mark done is left until the claim is old,
+ * so the message says that and not "retry" (review r2, RPP.2-3).
+ */
+function refusedAnswer(r: Extract<GrantOutcome, { ok: false }>, p: Payment, kept: string | null, at: When): Response {
+  const open = "The payment is still open.";
+  const byHand = `add the ${p.credits} credits by hand (Admin: add credits)`;
+  const [status, code, said, next, hand]: [number, string, string, string, string] =
+    r.code === "signed_out"
+      ? [401, "sign_in", "Your sign-in has run out, so no credits were added.", `${open} Sign in again and retry.`, `sign in again, ${byHand}`]
+      : r.code === "admin"
+        ? [403, "admin", "HintWise says your account is not an admin, so no credits were added.", open, `an admin can ${byHand}`]
+        : r.code === "not_found"
+          ? [
+              409,
+              "no_account",
+              `No HintWise account has the email ${p.email}, so no credits were added.`,
+              `${open} Add the credits by hand to the buyer's account (Admin: add credits), then Mark done.`,
+              "add the credits by hand to the buyer's account (Admin: add credits)",
+            ]
+          : r.code === "request"
+            ? [502, "grant_refused", `HintWise turned the grant down: it does not take ${p.email} with ${p.credits} credits. No credits were added.`, `${open} Add them by hand (Admin: add credits), then Mark done.`, byHand]
+            : [502, "grant_refused", `HintWise refused the grant (HTTP ${r.status}), so no credits were added.`, `${open} Add them by hand (Admin: add credits), then Mark done.`, byHand];
+  if (!kept) return fail(status, code, `${said} ${next}`);
+  return fail(status, "claim_kept", `${said} The payment could not be reopened for another grant, so only Mark done is offered for it: ${hand}, then press Mark done after ${claimEnds(kept, at)}.`);
+}
+
+/** It is not known whether credits-grant added the credits: the claim stays, and nothing is to be done by hand before the claim is old. */
+function unknownAnswer(r: Extract<GrantOutcome, { ok: false }>, p: Payment, claim: string, at: When): Response {
+  const wait = `Do not grant this payment again, and wait until ${claimEnds(claim, at)} before checking the balance of ${p.email} (Check balance); then add the ${p.credits} credits by hand (Admin: add credits) only if they are missing, and Mark done.`;
+  if (r.code === "unreachable") {
+    return fail(502, "grant_unreachable", `The connection to HintWise failed while the grant was being sent, so the credits may or may not have been added. ${wait}`);
   }
+  // A server error or an answer without a balance: the grant may have gone in before the answer was lost.
+  return fail(502, "grant_unclear", `HintWise did not confirm the grant${r.status ? ` (HTTP ${r.status})` : ""}, so the credits may or may not have been added. ${wait}`);
 }
 
 const READ_AT_ONCE = 8;
@@ -256,7 +265,7 @@ async function list(deps: AdminPaymentsDeps): Promise<Response> {
 }
 
 /** POST /api/admin/payments/:id/grant: add the pack's credits to the account the checkout named, then mark it granted. */
-async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promise<Response> {
+async function grant(id: string, token: string, deps: AdminPaymentsDeps, at: When): Promise<Response> {
   const now = deps.now?.() ?? new Date();
   let cur: Versioned<Payment> | null;
   try {
@@ -275,12 +284,17 @@ async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promis
   }
   if (p.grantStartedAt) {
     if (live(p.grantStartedAt, now)) {
-      return fail(409, "busy", "This payment is being granted right now (in another tab, or by another admin). Refresh the list in a minute.");
+      return fail(
+        409,
+        "busy",
+        `This payment is being granted right now (in another tab, or by another admin), since ${at(p.grantStartedAt)}. Do not grant it again, and wait until ${claimEnds(p.grantStartedAt, at)} before checking the balance or adding credits by hand; then refresh the list and follow what the row says.`,
+      );
     }
+    const end = claimEnd(p.grantStartedAt);
     return fail(
       409,
       "unfinished",
-      `A grant of this payment started at ${utc(p.grantStartedAt)} and did not finish, so the credits may or may not have been added. Check the balance of ${p.email} (Check balance), add the credits by hand if they are missing, then Mark done.`,
+      `A grant of this payment started at ${at(p.grantStartedAt)} and did not finish${end ? ` by ${at(end)}` : ""}, so the credits may or may not have been added. Do not grant it again: check the balance of ${p.email} (Check balance), add the credits by hand if they are missing, then Mark done.`,
     );
   }
   if (!cur.etag) {
@@ -301,8 +315,9 @@ async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promis
   if (!claimed) return fail(409, "busy", "This payment changed while you were granting it. Refresh the list.");
   const r = await deps.grant(token, { email: p.email, credits: p.credits, note: `Paddle ${p.transactionId} (${p.pack})` });
   if (!r.ok) {
-    if (REFUSED.includes(r.code)) await releaseClaim(deps.payments, id, claim);
-    return grantFailure(r, p, claim);
+    if (!REFUSED.includes(r.code)) return unknownAnswer(r, p, claim, at);
+    const released = await releaseClaim(deps.payments, id, claim);
+    return refusedAnswer(r, p, released ? null : claim, at);
   }
   const marked = await markGranted(deps.payments, id, deps.now?.() ?? new Date(), { claim, extra: { grantedCredits: p.credits } });
   const done = { email: r.email, balance: r.balance, credits: p.credits };
@@ -311,7 +326,7 @@ async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promis
     return fail(
       500,
       "not_marked",
-      `The ${p.credits} credits were added to ${r.email} (balance now ${r.balance}), but the payment could not be marked done. Do not grant it again; press Mark done after ${claimEnds(claim)}.`,
+      `The ${p.credits} credits were added to ${r.email} (balance now ${r.balance}), but the payment could not be marked done. Do not grant it again; press Mark done after ${claimEnds(claim, at)}.`,
       done,
     );
   }
@@ -321,7 +336,7 @@ async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promis
 }
 
 /** POST /api/admin/payments/:id/granted: mark it done without adding credits here. A second mark changes nothing; a young grant claim is waited for. */
-async function mark(id: string, deps: AdminPaymentsDeps): Promise<Response> {
+async function mark(id: string, deps: AdminPaymentsDeps, at: When): Promise<Response> {
   try {
     if (!(await deps.payments.getJSON<Payment>(keyOf(id)))) return fail(404, "not_found", "No such payment. Refresh the list.");
   } catch {
@@ -332,7 +347,7 @@ async function mark(id: string, deps: AdminPaymentsDeps): Promise<Response> {
     return fail(
       409,
       "grant_running",
-      `A grant of this payment started at ${utc(marked.claimedAt)} and may still be running, so it cannot be marked done before ${claimEnds(marked.claimedAt)}. Then refresh, check the account's balance, add any credits still missing by hand, and Mark done.`,
+      `A grant of this payment started at ${at(marked.claimedAt)} and may still be running, so it cannot be marked done before ${claimEnds(marked.claimedAt, at)}. Do not grant it again, and wait until then before checking the account's balance; then refresh, add any credits still missing by hand, and Mark done.`,
     );
   }
   if (!marked) return fail(503, "not_marked", "The payment could not be marked done. It is still open; try again.");
@@ -346,6 +361,7 @@ const ROUTE = /^\/api\/admin\/payments(?:\/([^/]+)\/(grant|granted))?\/?$/;
  * POST /api/admin/payments/:id/grant     add the pack's credits, then mark it granted
  * POST /api/admin/payments/:id/granted   mark it granted only
  * Every route needs a HintWise admin's own sign-in (Authorization: Bearer).
+ * The messages give times in the zone of TIME_ZONE_HEADER (UTC without one).
  */
 export async function handleAdminPayments(req: Request, deps: AdminPaymentsDeps): Promise<Response> {
   const m = ROUTE.exec(new URL(req.url).pathname);
@@ -361,5 +377,6 @@ export async function handleAdminPayments(req: Request, deps: AdminPaymentsDeps)
   } catch {
     return fail(404, "not_found", "No such payment. Refresh the list.");
   }
-  return action === "grant" ? grant(id, who.token, deps) : mark(id, deps);
+  const at = whenIn(zoneOrUtc(req.headers.get(TIME_ZONE_HEADER)));
+  return action === "grant" ? grant(id, who.token, deps, at) : mark(id, deps, at);
 }

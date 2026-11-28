@@ -31,7 +31,11 @@ export interface Payment {
   /** What the browser said at checkout (checkable in Paddle, not trusted). */
   userId: string | null;
   email: string | null;
+  /** Paddle's totals, as strings in the currency's smallest unit ("1000" is US$10.00): grand_total, what was paid with tax; */
   total: string | null;
+  /** subtotal, the price before discount and tax; and discount. Kept since review r2 (RPP.2-2), absent on older records. */
+  subtotal?: string | null;
+  discount?: string | null;
   currency: string | null;
   completedAt: string;
   grantedAt: string | null;
@@ -123,7 +127,7 @@ interface TxnData {
   currency_code?: string;
   custom_data?: Record<string, unknown> | null;
   items?: { price?: { id?: string } }[];
-  details?: { totals?: { grand_total?: string } };
+  details?: { totals?: { grand_total?: string; subtotal?: string; discount?: string } };
 }
 
 /** POST /api/paddle-webhook */
@@ -172,6 +176,8 @@ export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Prom
     userId: str(cd.user_id),
     email: str(cd.email),
     total: d.details?.totals?.grand_total ?? null,
+    subtotal: d.details?.totals?.subtotal ?? null,
+    discount: d.details?.totals?.discount ?? null,
     currency: d.currency_code ?? null,
     completedAt: now.toISOString(),
     grantedAt: null,

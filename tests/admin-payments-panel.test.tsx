@@ -18,6 +18,8 @@ const owed = (id: string, partial: Partial<OwedPayment> = {}): OwedPayment => ({
   userId: "4b1c0d2e-0000-4000-8000-000000000001",
   email: "kai@example.com",
   total: "1000",
+  subtotal: "1000",
+  discount: "0",
   currency: "USD",
   completedAt: "2026-11-28T10:00:00.000Z",
   grantedAt: null,
@@ -26,8 +28,11 @@ const owed = (id: string, partial: Partial<OwedPayment> = {}): OwedPayment => ({
 
 type Reply = { status: number; body: unknown } | "offline" | Promise<{ status: number; body: unknown }>;
 
+/** The panel's clock in these tests: an hour after the claims below, so they are old unless a test says otherwise. */
+const NOW = new Date("2026-11-28T19:00:00Z");
+
 /** A fake photo2pgn server: the list, and one answer per payment action, in order. */
-function server(list: Reply | Reply[], actions: Record<string, Reply[]> = {}) {
+function server(list: Reply | Reply[], actions: Record<string, Reply[]> = {}, now = NOW) {
   const lists = Array.isArray(list) ? [...list] : [list];
   const calls: string[] = [];
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -37,7 +42,7 @@ function server(list: Reply | Reply[], actions: Record<string, Reply[]> = {}) {
     if (r === "offline") throw new TypeError("offline");
     return new Response(JSON.stringify(r.body), { status: r.status });
   });
-  const deps: PaymentsDeps = { getToken: async () => "admin-tok", fetch: fetch as unknown as typeof globalThis.fetch };
+  const deps: PaymentsDeps = { getToken: async () => "admin-tok", fetch: fetch as unknown as typeof globalThis.fetch, now: () => now, zone: "UTC" };
   return { deps, calls };
 }
 
@@ -128,6 +133,9 @@ describe("the list's states", () => {
     await render(deps);
     const [a, b, c] = rows();
     expect(text()).toContain("3 payments to grant.");
+    expect(text()).toContain("adds the pack’s credits to the account the checkout named, then marks the payment done.");
+    expect(text()).not.toContain("the account that paid");
+    expect(a.querySelector(".payment-when")?.textContent).toBe("Sat, Nov 28, 10:00 AM UTC"); // the admin's zone, named, as in every message
     expect(a.textContent).toContain("50 credits (US$10 pack)");
     expect(a.textContent).toContain("PaidUS$10.00");
     expect(a.textContent).not.toContain("less than the list price");
@@ -235,6 +243,7 @@ describe("Grant and mark done", () => {
       ["a lost connection", "offline", /not known whether the grant reached it/],
       ["no etag", { status: 503, body: { error: { code: "unguarded", message: "The payment store gave this payment no version to write against." } } }, /no version/],
       ["busy", { status: 409, body: { error: { code: "busy", message: "This payment is being granted right now." } } }, /being granted right now/],
+      ["a claim not given back", { status: 401, body: { error: { code: "claim_kept", message: "Your sign-in has run out, so no credits were added. The payment could not be reopened for another grant." } } }, /could not be reopened/],
     ];
     for (const [name, reply, why] of cases) {
       const claimed = owed("txn_1", { grantStartedAt: "2026-11-28T18:00:00.000Z" });
@@ -246,7 +255,7 @@ describe("Grant and mark done", () => {
       expect(buttons(rows()[0]).map((x) => x.textContent), name).toEqual(["Mark done"]);
       expect(document.activeElement?.textContent).toBe("Mark done");
       await click(button("Refresh"));
-      expect(rows()[0].textContent).toMatch(/did not confirm, so the credits may or may not have been added/);
+      expect(rows()[0].textContent).toMatch(/did not confirm, so the credits may or may not have been added; anything it did had landed by Sat, Nov 28, 6:02 PM UTC\./);
       expect(buttons(rows()[0]).map((x) => x.textContent), name).toEqual(["Mark done"]);
       act(() => root?.unmount());
       host?.remove();
@@ -289,11 +298,39 @@ describe("Grant and mark done", () => {
     expect(rows()).toHaveLength(0);
   });
 
-  it("shows a grant that never finished, and offers only Mark done", async () => {
+  it("shows a grant that never finished, with the time it had landed by, and offers only Mark done", async () => {
     const { deps } = server({ status: 200, body: { payments: [owed("txn_1", { grantStartedAt: "2026-11-28T11:00:00.000Z" })] } });
     await render(deps);
-    expect(rows()[0].textContent).toMatch(/began \(.+\) and did not confirm, so the credits may or may not have been added\. Do not grant it again: check the account's balance/);
+    expect(rows()[0].textContent).toContain(
+      "A grant of this payment began at Sat, Nov 28, 11:00 AM UTC and did not confirm, so the credits may or may not have been added; anything it did had landed by Sat, Nov 28, 11:02 AM UTC. Do not grant it again: check the account's balance, add the credits by hand only if they are missing, then Mark done.",
+    );
     expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
+  });
+
+  it("says to wait, and not to check the balance or add credits yet, while another grant may still be running", async () => {
+    const { deps } = server({ status: 200, body: { payments: [owed("txn_1", { grantStartedAt: "2026-11-28T18:59:40.000Z" })] } });
+    await render(deps);
+    expect(rows()[0].textContent).toContain(
+      "A grant of this payment began at Sat, Nov 28, 6:59 PM UTC and may still be running. Do not grant it again, and wait until Sat, Nov 28, 7:01 PM UTC before checking the account's balance or adding credits by hand: then refresh the list and follow what this row says.",
+    );
+    expect(rows()[0].textContent).not.toMatch(/add the credits by hand only if|did not confirm/);
+    expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
+  });
+
+  it("says to refresh in two minutes, and nothing by hand yet, when photo2pgn's server did not answer", async () => {
+    for (const reply of ["offline", { status: 504, body: "" }] as Reply[]) {
+      const { deps } = server({ status: 200, body: { payments: [owed("txn_1")] } }, { "/api/admin/payments/txn_1/grant": [reply] });
+      await render(deps);
+      await click(button("Grant and mark done"));
+      const alert = rows()[0].querySelector('[role="alert"]')?.textContent ?? "";
+      expect(alert).toMatch(/Do not grant this payment again, and do not check the balance or add credits by hand yet: refresh the list in two minutes \(after Sat, Nov 28, 7:02 PM UTC\) and follow what the row then says\.$/);
+      expect(alert).not.toMatch(/check the account's balance before/);
+      expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
+      act(() => root?.unmount());
+      host?.remove();
+      root = null;
+      host = null;
+    }
   });
 });
 
@@ -317,7 +354,7 @@ describe("what was paid", () => {
     expect(calls.filter((c) => c.startsWith("POST"))).toEqual([]);
     const group = rows()[0].querySelector('[role="group"]')!;
     expect(group.getAttribute("aria-label")).toBe("Confirm Grant and mark done");
-    expect(group.textContent).toContain("Grant 50 credits for a payment of US$0.00 (the pack's list price is US$10)?");
+    expect(group.textContent).toContain("Grant 50 credits for a payment of US$0.00 (the pack's list price is US$10 before tax)?");
     expect(document.activeElement?.textContent).toBe("Yes, grant and mark done");
     await press("Escape");
     expect(document.activeElement?.textContent).toBe("Grant and mark done");
@@ -344,10 +381,10 @@ describe("what was paid", () => {
     expect(eur.querySelector(".payment-warn")?.textContent).toMatch(/^Paid in EUR, which cannot be compared with the pack's list price of US\$10 here/);
     expect(old.querySelector(".payment-flag")).toBeNull();
     await click(button("Grant and mark done", old));
-    expect(rows()[0].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment whose amount was not recorded (the pack's list price is US$10)?");
+    expect(rows()[0].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment whose amount was not recorded (the pack's list price is US$10 before tax)?");
     await press("Escape");
     await click(button("Grant and mark done", rows()[1]));
-    expect(rows()[1].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment of 9.20 EUR (the pack's list price is US$10)?");
+    expect(rows()[1].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment of 9.20 EUR (the pack's list price is US$10 before tax)?");
   });
 
   it("does not warn about the amount on a row that cannot be granted from here", async () => {
@@ -355,6 +392,44 @@ describe("what was paid", () => {
     await render(deps);
     expect(rows()[0].querySelector(".payment-warn")).toBeNull();
     expect(rows()[0].querySelector(".payment-flag")?.textContent).toBe("Paid less than the list price");
+  });
+
+  it("drops the amount warning once an answer leaves the row with Mark done only", async () => {
+    const { deps } = server(
+      { status: 200, body: { payments: [owed("txn_free", { total: "0" })] } },
+      { "/api/admin/payments/txn_free/grant": [{ status: 502, body: { error: { code: "grant_unclear", message: "HintWise did not confirm the grant (HTTP 504), so the credits may or may not have been added." } } }] },
+    );
+    await render(deps);
+    expect(rows()[0].querySelector(".payment-warn")?.textContent).toMatch(/^Paid US\$0\.00, less than/);
+    await click(button("Grant and mark done"));
+    await click(button("Yes, grant and mark done"));
+    expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
+    expect(rows()[0].querySelector(".payment-warn")).toBeNull(); // nothing to grant, so nothing to check before granting
+    expect(rows()[0].querySelector(".payment-flag")?.textContent).toBe("Paid less than the list price"); // the fact itself stays
+  });
+
+  it("flags a discount smaller than the tax, which leaves the total above the list price, and asks first (review r2's case)", async () => {
+    // 15% off the US$5 pack at 20% VAT: subtotal 500, discount 75, tax 85, total 510.
+    const { deps, calls } = server({ status: 200, body: { payments: [owed("txn_vat", { pack: "pack-20", credits: 20, total: "510", subtotal: "500", discount: "75" })] } });
+    await render(deps);
+    const row = rows()[0];
+    expect(row.textContent).toContain("PaidUS$5.10");
+    expect(row.querySelector(".payment-flag")?.textContent).toBe("Paid less than the list price");
+    expect(row.querySelector(".payment-warn")?.textContent).toBe("Paid US$5.10 after a discount of US$0.75 off the pack's list price of US$5 (before tax). Check the sale in Paddle before granting the whole pack.");
+    await click(button("Grant and mark done"));
+    expect(calls.filter((c) => c.startsWith("POST"))).toEqual([]);
+    expect(rows()[0].querySelector('[role="group"]')?.textContent).toContain("Grant 20 credits for a payment of US$5.10 after a discount of US$0.75 (the pack's list price is US$5 before tax)?");
+  });
+
+  it("asks first for an older record that kept only the total with tax", async () => {
+    const { deps, calls } = server({ status: 200, body: { payments: [owed("txn_old", { total: "1080", subtotal: undefined, discount: undefined })] } });
+    await render(deps);
+    const row = rows()[0];
+    expect(row.querySelector(".payment-flag")).toBeNull();
+    expect(row.querySelector(".payment-warn")?.textContent).toMatch(/^Paid US\$10\.80 with any tax\. This record does not keep the price before tax/);
+    await click(button("Grant and mark done"));
+    expect(calls.filter((c) => c.startsWith("POST"))).toEqual([]);
+    expect(rows()[0].querySelector('[role="group"]')?.textContent).toContain("Grant 50 credits for a payment of US$10.80 (the pack's list price is US$10 before tax)?");
   });
 });
 
@@ -391,7 +466,7 @@ describe("Mark done", () => {
   });
 
   it("says so when a grant is under way, and offers only Mark done", async () => {
-    const why = "A grant of this payment started at 28 Nov 2026, 18:00 UTC and may still be running, so it cannot be marked done before 28 Nov 2026, 18:02 UTC.";
+    const why = "A grant of this payment started at Sat, Nov 28, 6:00 PM UTC and may still be running, so it cannot be marked done before Sat, Nov 28, 6:02 PM UTC.";
     const { deps } = server({ status: 200, body: { payments: [owed("txn_1")] } }, { "/api/admin/payments/txn_1/granted": [{ status: 409, body: { error: { code: "grant_running", message: why } } }] });
     await render(deps);
     await click(button("Mark done"));
