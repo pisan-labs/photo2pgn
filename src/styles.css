@@ -133,6 +133,14 @@ hw-theme-toggle:not([hidden]) {
   height: var(--hw-theme-toggle-size, 44px);
 }
 
+/* Signed in on a phone, the switch takes room from the name: the tagline under the title gives it
+   back (at 320 px the name shows about 60 px, against 35 px with the tagline). */
+@media (max-width: 480px) {
+  .top:has(.account) .brand small {
+    display: none;
+  }
+}
+
 .brand {
   display: flex;
   gap: 12px;

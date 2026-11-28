@@ -147,3 +147,5 @@
 2026-11-26 [doc] privacy.html, review r1: the salt changes each UTC day, serves every HintWise app, goes at a later UTC day's first visit; redaction only as far as the script can tell; the export's demo flag named
 
 2026-11-28 [code] Light and dark mode switch (claude-built-apps platform/src/theme, copied unchanged): at the end of the app's header and beside the way back on the terms, refund and privacy pages; the dark styles follow it, on screens only.
+
+2026-11-28 [code] Theme switch review: the viewer's selected move and hovered step button take --on-accent (2.25:1 in dark before) and print in the ink; a signed-in phone header leaves out the tagline so the name keeps its room.

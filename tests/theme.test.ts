@@ -137,6 +137,14 @@ describe("the game viewer's text on the accent (review R1-2)", () => {
   });
 });
 
+describe("the signed-in header on a phone", () => {
+  it("drops the tagline under the title at 480 px and below, so the switch does not take the name's room", () => {
+    expect(css).toMatch(/@media \(max-width: 480px\) \{\s*\.top:has\(\.account\) \.brand small \{\s*display: none;\s*\}\s*\}/);
+    // The account the rule looks for, signed in, inside the header.
+    expect(read("src/App.tsx")).toMatch(/<header className="top">[\s\S]*<span className="row account">[\s\S]*<\/header>/);
+  });
+});
+
 describe("the switch", () => {
   beforeAll(async () => {
     await import("../src/lib/hw-theme.js");
