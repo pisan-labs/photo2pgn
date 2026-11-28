@@ -145,3 +145,7 @@
 2026-11-26 [note] Correction to the 2026-11-23 line: the branch merged as PR #7 was analytics-merge (71dc723), not analytics-on-main
 
 2026-11-26 [doc] privacy.html, review r1: the salt changes each UTC day, serves every HintWise app, goes at a later UTC day's first visit; redaction only as far as the script can tell; the export's demo flag named
+
+2026-11-28 [code] Paddle webhook (owner, 28 Nov: "chess fix now"): the Paddle account also sells mychessmaster.net memberships and Paddle sends every destination every event, so a transaction.completed whose custom_data.app is a non-empty string other than "photo2pgn" is answered 200 {ignored, reason: "other app"} and not recorded; untagged sales and photo2pgn's are recorded as before; records already stored are left as they are
+
+2026-11-28 [code] Paddle webhook, review r1 of #10: an untagged transaction.completed that carries a subscription_id (photo2pgn sells only one-time packs; mychessmaster.net's payment-method change would be one if Paddle completes it, and Paddle's sample shows custom_data null) is answered 200 {ignored, reason: "other app"} and not recorded; a photo2pgn tag always keeps the sale; the checkout and the webhook share one tag, PADDLE_APP_TAG in src/lib/credits.ts, with a round-trip test

@@ -4,7 +4,7 @@
 // owed. Only Paddle's addresses (its /ips list) get in; the signature is
 // checked on the raw body before anything else is read.
 import type { KV } from "./kv";
-import { CREDIT_PACKS } from "../../src/lib/credits";
+import { CREDIT_PACKS, PADDLE_APP_TAG } from "../../src/lib/credits";
 
 export interface PaddleConfig {
   webhookSecret: string | null; // PGN_PADDLE_WEBHOOK_SECRET: the notification destination's secret, not the API key
@@ -114,6 +114,7 @@ const reply = (status: number, body: object) =>
 interface TxnData {
   id?: string;
   customer_id?: string | null;
+  subscription_id?: string | null;
   currency_code?: string;
   custom_data?: Record<string, unknown> | null;
   items?: { price?: { id?: string } }[];
@@ -144,10 +145,19 @@ export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Prom
   if (event.event_type !== "transaction.completed" || !event.data || !id) return reply(200, { ignored: true });
 
   const d = event.data;
-  const priceIds = (d.items ?? []).map((i) => i.price?.id).filter((x): x is string => Boolean(x));
-  const pack = CREDIT_PACKS.find((p) => priceIds.includes(config.prices[p.id] ?? "\0")) ?? null;
   const cd = d.custom_data ?? {};
   const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  // The Paddle account also sells mychessmaster.net memberships (28 Nov), and Paddle sends
+  // every destination every event. Another app's sale is answered 200, so Paddle stops
+  // retrying, and nothing of it is kept or echoed: one another checkout tagged, or an untagged
+  // one made for a subscription (photo2pgn sells only one-time packs; mychessmaster.net's
+  // payment-method change is a subscription transaction with no custom data). A photo2pgn tag
+  // always keeps the sale, and an untagged one-time sale is kept as before.
+  const app = str(cd.app);
+  if (app !== PADDLE_APP_TAG && (app || str(d.subscription_id))) return reply(200, { ignored: true, reason: "other app" });
+
+  const priceIds = (d.items ?? []).map((i) => i.price?.id).filter((x): x is string => Boolean(x));
+  const pack = CREDIT_PACKS.find((p) => priceIds.includes(config.prices[p.id] ?? "\0")) ?? null;
   const payment: Payment = {
     transactionId: id,
     customerId: d.customer_id ?? null,

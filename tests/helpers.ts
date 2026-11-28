@@ -48,3 +48,10 @@ export function extraction(rows: MoveRow[], partial: Partial<Extraction> = {}): 
     ...partial,
   };
 }
+
+/** A Paddle-Signature header for a body: `ts=<unix>;h1=<hmac-sha256 hex of "<ts>:<body>">`. */
+export async function paddleSignature(body: string, secret: string, ts: number): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${ts}:${body}`)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `ts=${ts};h1=${mac}`;
+}

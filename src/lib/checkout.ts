@@ -10,7 +10,7 @@
 // custom_data (app, user_id, pack, credits) says whose HintWise account
 // paid, whatever email address was typed at checkout; a webhook can read
 // the same later.
-import { CREDIT_PACKS, type CreditPack } from "./credits";
+import { CREDIT_PACKS, PADDLE_APP_TAG, type CreditPack } from "./credits";
 
 export interface CheckoutConfig {
   token: string;
@@ -119,7 +119,7 @@ export async function openCheckout(
   paddle.Checkout.open({
     items: [{ priceId: config.prices[pack.id], quantity: 1 }],
     ...(buyer.email ? { customer: { email: buyer.email } } : {}),
-    customData: { app: "photo2pgn", user_id: buyer.userId, pack: pack.id, credits: pack.credits, ...(buyer.email ? { email: buyer.email } : {}) },
+    customData: { app: PADDLE_APP_TAG, user_id: buyer.userId, pack: pack.id, credits: pack.credits, ...(buyer.email ? { email: buyer.email } : {}) },
     settings: { displayMode: "overlay", theme: "light" },
   });
 }

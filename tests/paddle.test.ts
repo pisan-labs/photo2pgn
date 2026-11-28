@@ -2,6 +2,7 @@
 // the pack from the price id, the owner's list. No network.
 import { describe, expect, it } from "vitest";
 import { memoryKV } from "../netlify/lib/kv";
+import { paddleSignature } from "./helpers";
 import { PADDLE_IPS_URL, handlePaddleWebhook, handlePaymentGranted, handlePayments, inCidrs, paddleConfigFrom, paddleIps, validSignature, type Payment } from "../netlify/lib/paddle";
 
 const PADDLE_IP = "34.237.3.244";
@@ -11,11 +12,7 @@ const SECRET = "pdl_ntfset_test";
 const NOW = new Date("2026-11-15T12:00:00Z");
 const config = paddleConfigFrom({ PGN_PADDLE_WEBHOOK_SECRET: SECRET, PGN_PADDLE_PRICE_PACK_20: "pri_20", PGN_PADDLE_PRICE_PACK_50: "pri_50" });
 
-async function sign(body: string, ts = Math.floor(NOW.getTime() / 1000), secret = SECRET) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${ts}:${body}`)))].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `ts=${ts};h1=${mac}`;
-}
+const sign = (body: string, ts = Math.floor(NOW.getTime() / 1000), secret = SECRET) => paddleSignature(body, secret, ts);
 
 const txn = (id: string, price = "pri_50") =>
   JSON.stringify({
@@ -117,6 +114,112 @@ describe("webhook", () => {
     const { post, payments } = setup();
     await post(txn("txn_2", "pri_other"));
     expect((await payments.getJSON<Payment>("payment/txn_2"))!.value).toMatchObject({ pack: null, credits: null });
+  });
+
+  // The Paddle account also sells mychessmaster.net (28 Nov) and Paddle sends every destination
+  // every event: a sale another app tagged is not photo2pgn's to keep. Each test below has one
+  // beside its own cases, so it fails without the filter as well as with one that drops too much.
+  const sale = (id: string, customData?: unknown, price = "pri_other", extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      event_type: "transaction.completed",
+      data: { id, customer_id: "ctm_2", currency_code: "USD", items: [{ price: { id: price } }], details: { totals: { grand_total: "1500" } }, ...(customData === undefined ? {} : { custom_data: customData }), ...extra },
+    });
+  const mcm = { app: "mychessmaster", user_id: "m1", email: "b@example.com", plan: "plus" };
+
+  it("answers another app's sale 200 and keeps and echoes nothing of it", async () => {
+    const { post, payments, deps } = setup();
+    for (const [i, cd] of [mcm, { ...mcm, app: "other" }, { ...mcm, app: "PHOTO2PGN" }].entries()) {
+      for (const price of ["pri_mcm", "pri_50"]) {
+        const res = await post(sale(`txn_m${i}${price}`, cd, price));
+        expect(res.status).toBe(200); // so Paddle stops retrying
+        expect(await res.json()).toEqual({ ignored: true, reason: "other app" }); // exactly: no buyer detail, no custom data
+      }
+    }
+    expect(await payments.list("payment/")).toEqual([]);
+    expect(await (await handlePayments(true, deps)).json()).toEqual({ payments: [] });
+    // The address and signature checks still come first.
+    expect((await post(sale("txn_m9", mcm), "ts=1;h1=00")).status).toBe(401);
+    expect((await setup(config, "203.0.113.9").post(sale("txn_m9", mcm))).status).toBe(403);
+  });
+
+  it("keeps photo2pgn's own sales and untagged ones exactly as before, beside another app's", async () => {
+    const { post, payments, deps } = setup();
+    const own = { app: "photo2pgn", user_id: "u1", pack: "pack-50", credits: 50, email: "a@example.com" };
+    expect(await (await post(sale("txn_own", own, "pri_50"))).json()).toEqual({ recorded: true });
+    expect(await (await post(sale("txn_own_other", own))).json()).toEqual({ recorded: true });
+    expect(await (await post(sale("txn_none"))).json()).toEqual({ recorded: true }); // no custom_data
+    expect(await (await post(sale("txn_null", null))).json()).toEqual({ recorded: true });
+    expect(await (await post(sale("txn_noapp", { user_id: "u2" }))).json()).toEqual({ recorded: true });
+    expect(await (await post(sale("txn_mcm", mcm))).json()).toEqual({ ignored: true, reason: "other app" });
+    expect((await payments.getJSON<Payment>("payment/txn_own"))!.value).toEqual({
+      transactionId: "txn_own", customerId: "ctm_2", priceIds: ["pri_50"], pack: "pack-50", credits: 50, userId: "u1", email: "a@example.com", total: "1500", currency: "USD", completedAt: NOW.toISOString(), grantedAt: null,
+    });
+    expect((await payments.getJSON<Payment>("payment/txn_own_other"))!.value).toMatchObject({ pack: null, credits: null, userId: "u1" });
+    expect((await payments.getJSON<Payment>("payment/txn_none"))!.value).toMatchObject({ pack: null, userId: null, email: null });
+    expect((await payments.getJSON<Payment>("payment/txn_noapp"))!.value).toMatchObject({ pack: null, userId: "u2" });
+    const owed = ((await (await handlePayments(true, deps)).json()) as { payments: Payment[] }).payments.map((p) => p.transactionId);
+    expect(owed.sort()).toEqual(["txn_noapp", "txn_none", "txn_null", "txn_own", "txn_own_other"]);
+  });
+
+  it("takes an app that is empty or not a string as untagged", async () => {
+    const { post, payments } = setup();
+    const odd: unknown[] = ["", 7, 0, null, true, false, ["mychessmaster"], { name: "mychessmaster" }];
+    for (const [i, app] of odd.entries()) {
+      expect(await (await post(sale(`txn_odd${i}`, { app, user_id: "u3" }))).json()).toEqual({ recorded: true });
+    }
+    expect(await (await post(sale("txn_mcm", mcm))).json()).toEqual({ ignored: true, reason: "other app" });
+    expect((await payments.list("payment/")).sort()).toEqual(odd.map((_, i) => `payment/txn_odd${i}`).sort());
+    expect((await payments.getJSON<Payment>("payment/txn_odd0"))!.value).toMatchObject({ pack: null, userId: "u3" });
+  });
+
+  // photo2pgn sells only one-time packs, so an untagged transaction made for a subscription is
+  // another app's: mychessmaster.net's payment-method change, for one, is a zero-value
+  // subscription transaction with custom_data null. Each test has one beside its own cases.
+  const sub = { subscription_id: "sub_01" };
+
+  it("takes an untagged sale made for a subscription as another app's", async () => {
+    const { post, payments, deps } = setup();
+    const untagged: [unknown, string, Record<string, unknown>][] = [
+      [null, "pri_mcm", { ...sub, details: { totals: { grand_total: "0" } } }], // the payment-method change
+      [undefined, "pri_mcm", sub],
+      [{ user_id: "m1" }, "pri_mcm", sub],
+      [{ app: "" }, "pri_mcm", sub],
+      [{ app: 7 }, "pri_mcm", sub],
+      [null, "pri_50", sub], // even at a pack's price
+    ];
+    for (const [i, [cd, price, extra]] of untagged.entries()) {
+      const res = await post(sale(`txn_s${i}`, cd, price, extra));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ignored: true, reason: "other app" });
+    }
+    expect(await payments.list("payment/")).toEqual([]);
+    expect(await (await handlePayments(true, deps)).json()).toEqual({ payments: [] });
+  });
+
+  it("keeps an untagged one-time sale as before, beside the same made for a subscription", async () => {
+    const { post, payments } = setup();
+    const kept: string[] = [];
+    for (const [i, cd] of [undefined, null, { user_id: "u4" }].entries()) {
+      for (const [j, extra] of [{}, { subscription_id: null }, { subscription_id: "" }].entries()) {
+        expect(await (await post(sale(`txn_one${i}${j}`, cd, "pri_other", extra))).json()).toEqual({ recorded: true });
+        kept.push(`payment/txn_one${i}${j}`);
+      }
+      expect(await (await post(sale(`txn_sub${i}`, cd, "pri_other", sub))).json()).toEqual({ ignored: true, reason: "other app" });
+    }
+    expect((await payments.list("payment/")).sort()).toEqual(kept.sort());
+    expect((await payments.getJSON<Payment>("payment/txn_one21"))!.value).toEqual({
+      transactionId: "txn_one21", customerId: "ctm_2", priceIds: ["pri_other"], pack: null, credits: null, userId: "u4", email: null, total: "1500", currency: "USD", completedAt: NOW.toISOString(), grantedAt: null,
+    });
+  });
+
+  it("keeps a photo2pgn sale made for a subscription: the photo2pgn tag always wins", async () => {
+    const { post, payments } = setup();
+    expect(await (await post(sale("txn_own_sub", { app: "photo2pgn", user_id: "u1" }, "pri_50", sub))).json()).toEqual({ recorded: true });
+    expect(await (await post(sale("txn_own_sub_other", { app: "photo2pgn", user_id: "u1" }, "pri_other", sub))).json()).toEqual({ recorded: true });
+    expect(await (await post(sale("txn_sub", null, "pri_50", sub))).json()).toEqual({ ignored: true, reason: "other app" });
+    expect((await payments.list("payment/")).sort()).toEqual(["payment/txn_own_sub", "payment/txn_own_sub_other"]);
+    expect((await payments.getJSON<Payment>("payment/txn_own_sub"))!.value).toMatchObject({ pack: "pack-50", credits: 50, userId: "u1" });
+    expect((await payments.getJSON<Payment>("payment/txn_own_sub_other"))!.value).toMatchObject({ pack: null, credits: null, userId: "u1" });
   });
 
   it("ignores other events and refuses a body that is not JSON", async () => {
