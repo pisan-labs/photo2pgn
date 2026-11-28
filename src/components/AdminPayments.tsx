@@ -7,12 +7,29 @@ import { useEffect, useRef, useState } from "react";
 import { shortWhen } from "../lib/grant";
 import { grantable, grantPayment, listOwedPayments, markPaymentDone, packText, type OwedPayment, type PaymentsDeps } from "../lib/payments";
 
-type ListState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; payments: OwedPayment[] };
+type ListState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; payments: OwedPayment[]; unreadable: number };
 
 const withoutKey = (e: Record<string, string>, id: string) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== id));
 
-/** The server's answers after which only "Mark done" is offered: the credits may already be in, or there is nothing to grant from here. */
-const MARK_ONLY = new Set(["not_marked", "unfinished", "no_pack", "no_email", "grant_refused"]);
+/**
+ * The answers after which only "Mark done" is offered until a refresh: the
+ * credits may already be in (the grant's outcome is not known, or a grant is
+ * under way), or there is nothing to grant from here.
+ */
+const MARK_ONLY = new Set([
+  "not_marked",
+  "unfinished",
+  "no_pack",
+  "no_email",
+  "grant_refused",
+  "grant_unclear",
+  "grant_unreachable",
+  "grant_unknown",
+  "grant_network",
+  "unguarded",
+  "busy",
+  "grant_running",
+]);
 
 export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGranted?: () => void }) {
   const [list, setList] = useState<ListState>({ kind: "loading" });
@@ -22,7 +39,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
   // Why the last action on a row did not go through, per row, until that row is acted on again.
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [markOnly, setMarkOnly] = useState<string[]>([]);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ text: string; warn?: boolean }>({ text: "" });
   const [focusTo, setFocusTo] = useState<{ to: "notice" | "confirm" | "mark"; id?: string } | null>(null);
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -31,7 +48,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
   useEffect(() => {
     let live = true;
     void listOwedPayments(deps).then((r) => {
-      if (live) setList(r.ok ? { kind: "ready", payments: r.payments } : { kind: "error", message: r.message });
+      if (live) setList(r.ok ? { kind: "ready", payments: r.payments, unreadable: r.unreadable } : { kind: "error", message: r.message });
     });
     return () => {
       live = false;
@@ -48,7 +65,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
 
   const refresh = () => {
     setList({ kind: "loading" });
-    setNotice("");
+    setNotice({ text: "" });
     setRowErrors({});
     setMarkOnly([]); // the fresh list says again what each payment allows
     setConfirming(null);
@@ -60,13 +77,13 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
     const id = p.transactionId;
     setBusy({ id, kind });
     setRowErrors((e) => withoutKey(e, id));
-    setNotice("");
+    setNotice({ text: "" });
     const r = kind === "grant" ? await grantPayment(id, deps) : await markPaymentDone(id, deps);
     setBusy(null);
     setConfirming(null);
     if (r.ok) {
-      setList((l) => (l.kind === "ready" ? { kind: "ready", payments: l.payments.filter((x) => x.transactionId !== id) } : l));
-      setNotice(r.message);
+      setList((l) => (l.kind === "ready" ? { ...l, payments: l.payments.filter((x) => x.transactionId !== id) } : l));
+      setNotice({ text: r.message, warn: r.warn });
       setFocusTo({ to: "notice" });
       if (kind === "grant" && !r.already) onGranted?.();
       return;
@@ -100,8 +117,8 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
           Refresh
         </button>
       </div>
-      <p className="ok-note payments-notice" role="status" tabIndex={-1} ref={noticeRef}>
-        {notice}
+      <p className={`${notice.warn ? "warn" : "ok-note"} payments-notice`} role="status" tabIndex={-1} ref={noticeRef}>
+        {notice.text}
       </p>
 
       {list.kind === "loading" && (
@@ -119,7 +136,12 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
           </button>
         </div>
       )}
-      {list.kind === "ready" && list.payments.length === 0 && <p className="ok-note">No payments are waiting. Every sale so far is marked done.</p>}
+      {list.kind === "ready" && list.unreadable > 0 && (
+        <p className="error" role="alert">
+          {list.unreadable} {list.unreadable === 1 ? "payment record" : "payment records"} could not be read just now, so {list.unreadable === 1 ? "it is" : "they are"} not listed. Refresh to try again.
+        </p>
+      )}
+      {list.kind === "ready" && list.payments.length === 0 && list.unreadable === 0 && <p className="ok-note">No payments are waiting. Every sale so far is marked done.</p>}
       {list.kind === "ready" && list.payments.length > 0 && (
         <>
           <p className="hint">

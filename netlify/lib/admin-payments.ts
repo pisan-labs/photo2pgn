@@ -12,11 +12,15 @@
 // went through, so a failed grant or a failed mark leaves it in the list.
 // While a grant runs the payment carries a claim (grantStartedAt), taken
 // with the record's etag, so two clicks or two admins cannot add the
-// credits twice; a claim that never finished (the function was stopped)
-// is shown, and only "Mark done" is offered for it.
-import type { KV } from "./kv";
+// credits twice. credits-grant adds the credits every time it is called, so
+// the claim is given back only when credits-grant certainly wrote nothing
+// (review r1, RPP.1-1); after any answer that leaves it unclear the claim
+// stays, and only "Mark done" is offered, after checking the balance. A
+// record with no etag is never claimed (the claim would be an unconditional
+// write), and Mark done waits while a claim is young.
+import type { KV, Versioned } from "./kv";
 import { APP } from "./gateway";
-import { openPayments, type Payment } from "./paddle";
+import type { Payment } from "./paddle";
 import { isAllowance } from "../../src/lib/balance";
 
 /** What the gateway says about the caller: an admin, signed in but not an admin, signed out, or it could not be asked. */
@@ -42,9 +46,31 @@ export function gatewayAdminCheck(url: string, doFetch: typeof fetch = fetch): A
   };
 }
 
-export type GrantFailure = "signed_out" | "admin" | "not_found" | "request" | "unreachable" | "failed";
+/**
+ * Why a grant did not go through. The first five mean credits-grant certainly
+ * wrote nothing (see REFUSED); "unreachable" (the request threw: it may have
+ * been sent) and "failed" (any other status, or a 2xx without a balance) leave
+ * it unknown whether the credits went in.
+ */
+export type GrantFailure = "signed_out" | "admin" | "not_found" | "request" | "refused" | "unreachable" | "failed";
 export type GrantOutcome = { ok: true; email: string; balance: number } | { ok: false; code: GrantFailure; status: number | null };
 export type CreditsGrant = (token: string, grant: { email: string; credits: number; note: string }) => Promise<GrantOutcome>;
+
+/**
+ * The answers after which no credits were added, so the claim can be given
+ * back. From credits-grant's source (platform/supabase/functions/credits-grant
+ * and src/credits/grant.ts): 401 comes before the token's user is known, 403
+ * before the grant, 400 for a request it could not read or a balance that
+ * would go below zero, 404 for an email with no account (those two are raised
+ * inside platform.credit_grant, so it rolled back); Supabase's own layer
+ * answers 400, 401, 403 and 404 before the function runs at all. A 500
+ * `database` is not one of them: credits-grant gives it for every other error
+ * of the database call, and supabase-js reports a connection lost on the way
+ * back from a call that committed as just such an error, so the body cannot
+ * tell "refused" from "written, answer lost".
+ */
+export const REFUSED_STATUSES: readonly number[] = [400, 401, 403, 404];
+const REFUSED: readonly GrantFailure[] = ["signed_out", "admin", "not_found", "request", "refused"];
 
 /** The platform's credits-grant function, with the admin's own token: {app, email, credits, note} -> {email, balance}. */
 export function creditsGrantClient(url: string, doFetch: typeof fetch = fetch): CreditsGrant {
@@ -57,12 +83,23 @@ export function creditsGrantClient(url: string, doFetch: typeof fetch = fetch): 
         body: JSON.stringify({ app: APP, ...grant }),
       });
     } catch {
+      // Also thrown when the connection closes after the request went out, by when the grant may have gone in.
       return { ok: false, code: "unreachable", status: null };
     }
     const data = (await res.json().catch(() => ({}))) as { email?: unknown; balance?: unknown; error?: unknown };
     if (res.ok && typeof data.balance === "number") return { ok: true, email: typeof data.email === "string" ? data.email : grant.email, balance: data.balance };
     const code: GrantFailure =
-      res.status === 401 ? "signed_out" : data.error === "admin" ? "admin" : data.error === "not_found" ? "not_found" : data.error === "request" ? "request" : "failed";
+      res.status === 401
+        ? "signed_out"
+        : res.status === 403 && data.error === "admin"
+          ? "admin"
+          : res.status === 404 && data.error === "not_found"
+            ? "not_found"
+            : res.status === 400
+              ? "request"
+              : REFUSED_STATUSES.includes(res.status)
+                ? "refused"
+                : "failed";
     return { ok: false, code, status: res.status };
   };
 }
@@ -105,20 +142,32 @@ async function admitted(req: Request, deps: AdminPaymentsDeps): Promise<{ token:
   return fail(403, "admin", "Only a HintWise admin can see the payments.");
 }
 
+/** A claim younger than GRANT_CLAIM_MS: the grant that took it may still be running. */
+const live = (claim: string, now: Date) => now.getTime() - Date.parse(claim) < GRANT_CLAIM_MS;
+/** When a claim stops being young: after that, anything its grant did has landed. */
+const claimEnds = (claim: string) => utc(new Date(Date.parse(claim) + GRANT_CLAIM_MS).toISOString());
+const STORE_DOWN = (what: string) => `Could not ${what} the payment store just now, so nothing was granted or marked. Try again in a minute.`;
+
+type Marked = { grantedAt: string; already: boolean } | { claimedAt: string } | null;
+
 /**
  * Mark a payment granted, once: when it is marked (now, or already before),
  * and whether it was before. A lost write is tried again on the fresh record;
  * null when it never went through (gone, or the storage failed), so the
- * payment stays in the list.
+ * payment stays in the list. A young claim other than `claim` (the caller's
+ * own, after its grant) is not marked over: its grant may still be running.
  */
-async function markGranted(kv: KV, id: string, at: string, extra: Partial<Payment> = {}): Promise<{ grantedAt: string; already: boolean } | null> {
+async function markGranted(kv: KV, id: string, now: Date, opts: { claim?: string; extra?: Partial<Payment> } = {}): Promise<Marked> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const cur = await kv.getJSON<Payment>(keyOf(id));
       if (!cur) return null;
       if (cur.value.grantedAt) return { grantedAt: cur.value.grantedAt, already: true };
-      const next: Payment = { ...cur.value, ...extra, grantedAt: at, grantStartedAt: null };
-      if (await kv.setJSON(keyOf(id), next, { onlyIfMatch: cur.etag })) return { grantedAt: at, already: false };
+      const claimed = cur.value.grantStartedAt;
+      if (claimed && claimed !== opts.claim && live(claimed, now)) return { claimedAt: claimed };
+      const next: Payment = { ...cur.value, ...opts.extra, grantedAt: now.toISOString(), grantStartedAt: null };
+      // With no etag there can be no claim to keep (a grant refuses such a record), so the mark is the one write left.
+      if (await kv.setJSON(keyOf(id), next, cur.etag ? { onlyIfMatch: cur.etag } : undefined)) return { grantedAt: now.toISOString(), already: false };
     }
   } catch (err) {
     console.error("admin-payments: could not mark", id, err instanceof Error ? err.message : err);
@@ -126,11 +175,11 @@ async function markGranted(kv: KV, id: string, at: string, extra: Partial<Paymen
   return null;
 }
 
-/** Take back a claim after a grant that did not go through, so it can be tried again. */
+/** Take back a claim after credits-grant refused the grant (nothing was written), so it can be tried again. */
 async function releaseClaim(kv: KV, id: string, claim: string): Promise<void> {
   try {
     const cur = await kv.getJSON<Payment>(keyOf(id));
-    if (cur && !cur.value.grantedAt && cur.value.grantStartedAt === claim) {
+    if (cur?.etag && !cur.value.grantedAt && cur.value.grantStartedAt === claim) {
       await kv.setJSON(keyOf(id), { ...cur.value, grantStartedAt: null }, { onlyIfMatch: cur.etag });
     }
   } catch (err) {
@@ -138,8 +187,10 @@ async function releaseClaim(kv: KV, id: string, claim: string): Promise<void> {
   }
 }
 
-function grantFailure(r: Extract<GrantOutcome, { ok: false }>, p: Payment): Response {
+function grantFailure(r: Extract<GrantOutcome, { ok: false }>, p: Payment, claim: string): Response {
   const still = "The payment is still open.";
+  // The claim stays: the payment is never offered for a grant again, only Mark done once the balance is checked.
+  const unknown = `Do not grant this payment again. After ${claimEnds(claim)}, check the balance of ${p.email} (Check balance): add the ${p.credits} credits by hand (Admin: add credits) only if they are missing, then Mark done.`;
   switch (r.code) {
     case "signed_out":
       return fail(401, "sign_in", `Your sign-in has run out, so no credits were added. ${still} Sign in again and retry.`);
@@ -151,35 +202,68 @@ function grantFailure(r: Extract<GrantOutcome, { ok: false }>, p: Payment): Resp
         "no_account",
         `No HintWise account has the email ${p.email}, so no credits were added. ${still} Add the credits by hand to the buyer's account (Admin: add credits), then Mark done.`,
       );
-    case "unreachable":
-      return fail(502, "grant_unreachable", `Could not reach HintWise to add the credits. ${still} Try again in a minute.`);
     case "request":
       return fail(
         502,
         "grant_refused",
         `HintWise turned the grant down: it does not take ${p.email} with ${p.credits} credits. No credits were added. ${still} Add them by hand (Admin: add credits), then Mark done.`,
       );
+    case "refused":
+      return fail(502, "grant_refused", `HintWise refused the grant (HTTP ${r.status}), so no credits were added. ${still} Add them by hand (Admin: add credits), then Mark done.`);
+    case "unreachable":
+      return fail(502, "grant_unreachable", `The connection to HintWise failed while the grant was being sent, so the credits may or may not have been added. ${unknown}`);
     default:
       // A server error or an answer without a balance: the grant may have gone in before the answer was lost.
-      return fail(
-        502,
-        "grant_unclear",
-        `HintWise did not confirm the grant${r.status ? ` (HTTP ${r.status})` : ""}. ${still} Before you try again, check the balance of ${p.email} (Check balance), in case the credits went in.`,
-      );
+      return fail(502, "grant_unclear", `HintWise did not confirm the grant${r.status ? ` (HTTP ${r.status})` : ""}, so the credits may or may not have been added. ${unknown}`);
   }
 }
 
-/** GET /api/admin/payments: the payments not yet marked granted, newest first. */
+const READ_AT_ONCE = 8;
+
+/**
+ * The payments not yet marked granted, read a few at a time. A record that
+ * cannot be read (a store error, or not a payment) is counted and left out,
+ * so one bad record does not hide the rest. A failed listing throws.
+ */
+export async function readOpenPayments(kv: KV): Promise<{ open: Payment[]; unreadable: number }> {
+  const keys = await kv.list("payment/");
+  const open: Payment[] = [];
+  let unreadable = 0;
+  for (let i = 0; i < keys.length; i += READ_AT_ONCE) {
+    const read = await Promise.allSettled(keys.slice(i, i + READ_AT_ONCE).map((k) => kv.getJSON<Payment>(k)));
+    for (const r of read) {
+      if (r.status === "rejected") unreadable++;
+      else if (!r.value) continue; // removed since the listing
+      else if (typeof r.value.value?.transactionId !== "string" || typeof r.value.value.completedAt !== "string") unreadable++;
+      else if (!r.value.value.grantedAt) open.push(r.value.value);
+    }
+  }
+  if (unreadable) console.error("admin-payments:", unreadable, "payment records could not be read");
+  return { open, unreadable };
+}
+
+/** GET /api/admin/payments: the payments not yet marked granted, newest first, and how many records could not be read. */
 async function list(deps: AdminPaymentsDeps): Promise<Response> {
-  const owed = await openPayments(deps.payments);
-  owed.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
-  return json(200, { payments: owed });
+  let read: Awaited<ReturnType<typeof readOpenPayments>>;
+  try {
+    read = await readOpenPayments(deps.payments);
+  } catch (err) {
+    console.error("admin-payments: could not list", err instanceof Error ? err.message : err);
+    return fail(503, "store", "The payments could not be read from the store just now. Try again in a minute.");
+  }
+  read.open.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+  return json(200, { payments: read.open, ...(read.unreadable ? { unreadable: read.unreadable } : {}) });
 }
 
 /** POST /api/admin/payments/:id/grant: add the pack's credits to the account the checkout named, then mark it granted. */
 async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promise<Response> {
   const now = deps.now?.() ?? new Date();
-  const cur = await deps.payments.getJSON<Payment>(keyOf(id));
+  let cur: Versioned<Payment> | null;
+  try {
+    cur = await deps.payments.getJSON<Payment>(keyOf(id));
+  } catch {
+    return fail(503, "store", STORE_DOWN("read"));
+  }
   if (!cur) return fail(404, "not_found", "No such payment. Refresh the list.");
   const p = cur.value;
   if (p.grantedAt) return json(200, { already: true, grantedAt: p.grantedAt });
@@ -190,7 +274,7 @@ async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promis
     return fail(409, "no_email", "The checkout did not carry the account's email, so the credits cannot be added from here. Add them by hand to the buyer's account, then Mark done.");
   }
   if (p.grantStartedAt) {
-    if (now.getTime() - Date.parse(p.grantStartedAt) < GRANT_CLAIM_MS) {
+    if (live(p.grantStartedAt, now)) {
       return fail(409, "busy", "This payment is being granted right now (in another tab, or by another admin). Refresh the list in a minute.");
     }
     return fail(
@@ -199,33 +283,58 @@ async function grant(id: string, token: string, deps: AdminPaymentsDeps): Promis
       `A grant of this payment started at ${utc(p.grantStartedAt)} and did not finish, so the credits may or may not have been added. Check the balance of ${p.email} (Check balance), add the credits by hand if they are missing, then Mark done.`,
     );
   }
-  const claim = now.toISOString();
-  if (!(await deps.payments.setJSON(keyOf(id), { ...p, grantStartedAt: claim }, { onlyIfMatch: cur.etag }))) {
-    return fail(409, "busy", "This payment changed while you were granting it. Refresh the list.");
+  if (!cur.etag) {
+    // Without a version the claim would be an unconditional write, and two grants could both go through.
+    return fail(
+      503,
+      "unguarded",
+      `The payment store gave this payment no version to write against, so a grant from here could not be kept from running twice. No credits were added. The payment is still open. Add them by hand (Admin: add credits), then Mark done.`,
+    );
   }
+  const claim = now.toISOString();
+  let claimed: boolean;
+  try {
+    claimed = await deps.payments.setJSON(keyOf(id), { ...p, grantStartedAt: claim }, { onlyIfMatch: cur.etag });
+  } catch {
+    return fail(503, "store", "Could not record that this payment is being granted, so no credits were added. Refresh the list before trying again.");
+  }
+  if (!claimed) return fail(409, "busy", "This payment changed while you were granting it. Refresh the list.");
   const r = await deps.grant(token, { email: p.email, credits: p.credits, note: `Paddle ${p.transactionId} (${p.pack})` });
   if (!r.ok) {
-    await releaseClaim(deps.payments, id, claim);
-    return grantFailure(r, p);
+    if (REFUSED.includes(r.code)) await releaseClaim(deps.payments, id, claim);
+    return grantFailure(r, p, claim);
   }
-  const marked = await markGranted(deps.payments, id, (deps.now?.() ?? new Date()).toISOString(), { grantedCredits: p.credits });
+  const marked = await markGranted(deps.payments, id, deps.now?.() ?? new Date(), { claim, extra: { grantedCredits: p.credits } });
   const done = { email: r.email, balance: r.balance, credits: p.credits };
-  if (!marked) {
+  if (!marked || "claimedAt" in marked) {
     // The credits are in; the claim stays, so nobody adds them again from here.
     return fail(
       500,
       "not_marked",
-      `The ${p.credits} credits were added to ${r.email} (balance now ${r.balance}), but the payment could not be marked done. Press Mark done; do not grant it again.`,
+      `The ${p.credits} credits were added to ${r.email} (balance now ${r.balance}), but the payment could not be marked done. Do not grant it again; press Mark done after ${claimEnds(claim)}.`,
       done,
     );
   }
+  // Marked by someone else while the grant ran (the owner's worker route, say): the account may now have the credits twice.
+  if (marked.already) return json(200, { ...done, grantedAt: marked.grantedAt, already: false, markedMeanwhile: true });
   return json(200, { ...done, grantedAt: marked.grantedAt, already: false });
 }
 
-/** POST /api/admin/payments/:id/granted: mark it done without adding credits here. A second mark changes nothing. */
+/** POST /api/admin/payments/:id/granted: mark it done without adding credits here. A second mark changes nothing; a young grant claim is waited for. */
 async function mark(id: string, deps: AdminPaymentsDeps): Promise<Response> {
-  if (!(await deps.payments.getJSON<Payment>(keyOf(id)))) return fail(404, "not_found", "No such payment. Refresh the list.");
-  const marked = await markGranted(deps.payments, id, (deps.now?.() ?? new Date()).toISOString());
+  try {
+    if (!(await deps.payments.getJSON<Payment>(keyOf(id)))) return fail(404, "not_found", "No such payment. Refresh the list.");
+  } catch {
+    return fail(503, "store", STORE_DOWN("read"));
+  }
+  const marked = await markGranted(deps.payments, id, deps.now?.() ?? new Date());
+  if (marked && "claimedAt" in marked) {
+    return fail(
+      409,
+      "grant_running",
+      `A grant of this payment started at ${utc(marked.claimedAt)} and may still be running, so it cannot be marked done before ${claimEnds(marked.claimedAt)}. Then refresh, check the account's balance, add any credits still missing by hand, and Mark done.`,
+    );
+  }
   if (!marked) return fail(503, "not_marked", "The payment could not be marked done. It is still open; try again.");
   return json(200, marked);
 }

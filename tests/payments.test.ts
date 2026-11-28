@@ -22,11 +22,16 @@ const owed = (partial: Partial<OwedPayment> = {}): OwedPayment => ({
 describe("listOwedPayments", () => {
   it("asks photo2pgn's admin route with the admin's token", async () => {
     const f = answer(200, { payments: [owed()] });
-    expect(await listOwedPayments(deps(f))).toEqual({ ok: true, payments: [owed()] });
+    expect(await listOwedPayments(deps(f))).toEqual({ ok: true, payments: [owed()], unreadable: 0 });
     const [url, init] = f.mock.calls[0];
     expect(url).toBe("/api/admin/payments");
     expect(init?.method).toBe("GET");
     expect(new Headers(init!.headers).get("authorization")).toBe("Bearer admin-tok");
+  });
+
+  it("passes on how many records the server could not read", async () => {
+    expect(await listOwedPayments(deps(answer(200, { payments: [], unreadable: 2 })))).toEqual({ ok: true, payments: [], unreadable: 2 });
+    expect(await listOwedPayments(deps(answer(200, { payments: [], unreadable: "2" })))).toEqual({ ok: true, payments: [], unreadable: 0 });
   });
 
   it("passes on the server's plain words, and falls back to its own", async () => {
@@ -66,10 +71,47 @@ describe("grantPayment", () => {
   });
 
   it("passes on why the grant failed, with its code", async () => {
-    const message = "The 50 credits were added to kai@example.com (balance now 62), but the payment could not be marked done. Press Mark done; do not grant it again.";
+    const message = "The 50 credits were added to kai@example.com (balance now 62), but the payment could not be marked done. Do not grant it again; press Mark done after 28 Nov 2026, 18:02 UTC.";
     expect(await grantPayment("txn_1", deps(answer(500, { error: { code: "not_marked", message } })))).toEqual({ ok: false, code: "not_marked", message });
-    expect(await grantPayment("txn_1", deps(answer(502, {})))).toEqual({ ok: false, code: "error", message: "The credits were not added (HTTP 502). Try again." });
-    expect(await grantPayment("txn_1", deps(answer(200, { odd: true })))).toMatchObject({ ok: false, message: /HTTP 200/ });
+    expect(await grantPayment("txn_1", deps(answer(409, { error: { message: "Odd." } })))).toEqual({ ok: false, code: "error", message: "Odd." });
+  });
+
+  it("never says the credits were not added when photo2pgn's server did not say", async () => {
+    for (const [status, body] of [
+      [502, ""],
+      [504, "<html>timed out</html>"],
+      [502, {}],
+      [500, { error: {} }],
+      [200, { odd: true }],
+      [401, ""],
+    ] as const) {
+      const r = await grantPayment("txn_1", deps(answer(status, body)));
+      expect(r).toEqual({
+        ok: false,
+        code: "grant_unknown",
+        message: `Photo to PGN did not say whether the credits were added (HTTP ${status}). Do not grant this payment again until you have refreshed the list, and check the account's balance before doing anything else.`,
+      });
+      expect(r.message).not.toMatch(/were not added/);
+    }
+  });
+
+  it("says the outcome is not known when the connection fails", async () => {
+    const offline = vi.fn(async () => {
+      throw new TypeError("network error");
+    });
+    expect(await grantPayment("txn_1", { getToken: async () => "t", fetch: offline as unknown as typeof fetch })).toEqual({
+      ok: false,
+      code: "grant_network",
+      message: expect.stringMatching(/^The connection to Photo to PGN failed, so it is not known whether the grant reached it or whether the credits were added\. Do not grant this payment again until you have refreshed the list/),
+    });
+    expect(await grantPayment("txn_1", { getToken: async () => null })).toMatchObject({ ok: false, code: "sign_in" });
+  });
+
+  it("warns when someone else marked the payment done while the grant ran", async () => {
+    const r = await grantPayment("txn_1", deps(answer(200, { email: "kai@example.com", balance: 100, credits: 50, grantedAt: "2026-11-28T18:00:05.000Z", already: false, markedMeanwhile: true })));
+    expect(r).toMatchObject({ ok: true, already: false, warn: true });
+    expect(r.message).toMatch(/^Added 50 credits to kai@example\.com \(balance now 100\), but someone else marked the payment done while the grant was running \(.+\)\. If they also added the credits by hand, the account has them twice/);
+    expect((await grantPayment("txn_1", deps(answer(200, { credits: 50, markedMeanwhile: true })))).message).toMatch(/while the grant was running\. If they/);
   });
 });
 
@@ -104,6 +146,7 @@ describe("what a row says", () => {
     expect(grantable(owed())).toEqual({ ok: true });
     expect(grantable(owed({ pack: null, credits: null }))).toMatchObject({ ok: false, why: /Not one of the packs/ });
     expect(grantable(owed({ email: null }))).toMatchObject({ ok: false, why: /did not carry the account's email/ });
-    expect(grantable(owed({ grantStartedAt: "2026-11-28T10:00:00.000Z" }))).toMatchObject({ ok: false, why: /has not finished/ });
+    expect(grantable(owed({ grantStartedAt: "2026-11-28T10:00:00.000Z" }))).toMatchObject({ ok: false, why: /^A grant of this payment began \(.+\) and did not confirm.*Do not grant it again: check the account's balance/ });
+    expect(grantable(owed({ grantStartedAt: "not a date" }))).toMatchObject({ ok: false, why: /^A grant of this payment began and did not confirm/ });
   });
 });

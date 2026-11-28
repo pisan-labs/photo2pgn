@@ -100,6 +100,19 @@ describe("the list's states", () => {
     expect(calls.filter((c) => c === "GET /api/admin/payments")).toHaveLength(2);
   });
 
+  it("says how many payment records could not be read", async () => {
+    const { deps } = server([
+      { status: 200, body: { payments: [owed("txn_1")], unreadable: 2 } },
+      { status: 200, body: { payments: [], unreadable: 1 } },
+    ]);
+    await render(deps);
+    expect(host!.querySelector('[role="alert"]')?.textContent).toBe("2 payment records could not be read just now, so they are not listed. Refresh to try again.");
+    expect(rows()).toHaveLength(1);
+    await click(button("Refresh"));
+    expect(host!.querySelector('[role="alert"]')?.textContent).toBe("1 payment record could not be read just now, so it is not listed. Refresh to try again.");
+    expect(text()).not.toContain("No payments are waiting");
+  });
+
   it("says so in plain words when the server cannot be reached", async () => {
     await render(server("offline").deps);
     expect(host!.querySelector('[role="alert"]')?.textContent).toMatch(/Could not reach Photo to PGN/);
@@ -165,10 +178,10 @@ describe("Grant and mark done", () => {
   });
 
   it("keeps a row's error while another row is acted on, and clears it when that row is tried again", async () => {
-    const why = "Could not reach HintWise to add the credits. The payment is still open. Try again in a minute.";
+    const why = "Your sign-in has run out, so no credits were added. The payment is still open. Sign in again and retry.";
     const { deps } = server(
       { status: 200, body: { payments: [owed("txn_1"), owed("txn_2")] } },
-      { "/api/admin/payments/txn_1/grant": [{ status: 502, body: { error: { code: "grant_unreachable", message: why } } }, new Promise(() => undefined)] },
+      { "/api/admin/payments/txn_1/grant": [{ status: 401, body: { error: { code: "sign_in", message: why } } }, new Promise(() => undefined)] },
     );
     await render(deps);
     await click(button("Grant and mark done", rows()[0]));
@@ -210,6 +223,50 @@ describe("Grant and mark done", () => {
     expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Grant and mark done", "Mark done"]);
   });
 
+  it("offers only Mark done whenever it is not known whether the credits went in, also after a refresh", async () => {
+    const cases: [string, Reply, RegExp][] = [
+      ["grant_unclear", { status: 502, body: { error: { code: "grant_unclear", message: "HintWise did not confirm the grant (HTTP 504), so the credits may or may not have been added. Do not grant this payment again." } } }, /did not confirm the grant/],
+      ["grant_unreachable", { status: 502, body: { error: { code: "grant_unreachable", message: "The connection to HintWise failed while the grant was being sent, so the credits may or may not have been added." } } }, /connection to HintWise failed/],
+      ["Netlify's 504", { status: 504, body: "" }, /did not say whether the credits were added \(HTTP 504\)/],
+      ["a lost connection", "offline", /not known whether the grant reached it/],
+      ["no etag", { status: 503, body: { error: { code: "unguarded", message: "The payment store gave this payment no version to write against." } } }, /no version/],
+      ["busy", { status: 409, body: { error: { code: "busy", message: "This payment is being granted right now." } } }, /being granted right now/],
+    ];
+    for (const [name, reply, why] of cases) {
+      const claimed = owed("txn_1", { grantStartedAt: "2026-11-28T18:00:00.000Z" });
+      const { deps } = server([{ status: 200, body: { payments: [owed("txn_1")] } }, { status: 200, body: { payments: [claimed] } }], { "/api/admin/payments/txn_1/grant": [reply] });
+      await render(deps);
+      await click(button("Grant and mark done"));
+      expect(rows()[0].querySelector('[role="alert"]')?.textContent, name).toMatch(why);
+      expect(rows()[0].textContent).not.toMatch(/were not added/);
+      expect(buttons(rows()[0]).map((x) => x.textContent), name).toEqual(["Mark done"]);
+      expect(document.activeElement?.textContent).toBe("Mark done");
+      await click(button("Refresh"));
+      expect(rows()[0].textContent).toMatch(/did not confirm, so the credits may or may not have been added/);
+      expect(buttons(rows()[0]).map((x) => x.textContent), name).toEqual(["Mark done"]);
+      act(() => root?.unmount());
+      host?.remove();
+      root = null;
+      host = null;
+    }
+  });
+
+  it("warns, and does not just say done, when someone else marked the payment while the grant ran", async () => {
+    const onGranted = vi.fn();
+    const { deps } = server(
+      { status: 200, body: { payments: [owed("txn_1")] } },
+      { "/api/admin/payments/txn_1/grant": [{ status: 200, body: { email: "kai@example.com", balance: 100, credits: 50, already: false, markedMeanwhile: true, grantedAt: "2026-11-28T18:00:05.000Z" } }] },
+    );
+    await render(deps, onGranted);
+    await click(button("Grant and mark done"));
+    const notice = host!.querySelector(".payments-notice")!;
+    expect(notice.textContent).toMatch(/^Added 50 credits to kai@example\.com \(balance now 100\), but someone else marked the payment done while the grant was running/);
+    expect(notice.className).toContain("warn");
+    expect(document.activeElement).toBe(notice);
+    expect(rows()).toHaveLength(0);
+    expect(onGranted).toHaveBeenCalledTimes(1);
+  });
+
   it("does nothing on a second click while the first is under way", async () => {
     let answer: (v: { status: number; body: unknown }) => void = () => undefined;
     const { deps, calls } = server({ status: 200, body: { payments: [owed("txn_1")] } }, { "/api/admin/payments/txn_1/grant": [new Promise((r) => (answer = r))] });
@@ -231,7 +288,7 @@ describe("Grant and mark done", () => {
   it("shows a grant that never finished, and offers only Mark done", async () => {
     const { deps } = server({ status: 200, body: { payments: [owed("txn_1", { grantStartedAt: "2026-11-28T11:00:00.000Z" })] } });
     await render(deps);
-    expect(rows()[0].textContent).toMatch(/began and has not finished\. Check the account's balance/);
+    expect(rows()[0].textContent).toMatch(/began \(.+\) and did not confirm, so the credits may or may not have been added\. Do not grant it again: check the account's balance/);
     expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
   });
 });
@@ -266,6 +323,16 @@ describe("Mark done", () => {
     expect(text()).toContain("No payments are waiting");
     expect(host!.querySelector(".payments-notice")?.textContent).toBe("Marked the payment done.");
     expect(onGranted).not.toHaveBeenCalled();
+  });
+
+  it("says so when a grant is under way, and offers only Mark done", async () => {
+    const why = "A grant of this payment started at 28 Nov 2026, 18:00 UTC and may still be running, so it cannot be marked done before 28 Nov 2026, 18:02 UTC.";
+    const { deps } = server({ status: 200, body: { payments: [owed("txn_1")] } }, { "/api/admin/payments/txn_1/granted": [{ status: 409, body: { error: { code: "grant_running", message: why } } }] });
+    await render(deps);
+    await click(button("Mark done"));
+    await click(button("Yes, mark done"));
+    expect(rows()[0].querySelector('[role="alert"]')?.textContent).toBe(why);
+    expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
   });
 
   it("says why when the mark fails, and keeps the payment", async () => {

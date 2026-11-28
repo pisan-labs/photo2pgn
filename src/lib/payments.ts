@@ -5,6 +5,7 @@
 // platform's credits-grant function before it marks the payment granted.
 import { currentToken } from "./auth";
 import { CREDIT_PACKS } from "./credits";
+import { shortWhen } from "./grant";
 
 /** One payment still owed, as the server keeps it (netlify/lib/paddle.ts, Payment). */
 export interface OwedPayment {
@@ -28,13 +29,17 @@ export interface PaymentsDeps {
   fetch?: typeof fetch;
 }
 
-export type PaymentsList = { ok: true; payments: OwedPayment[] } | { ok: false; message: string };
-export type PaymentDone = { ok: true; already: boolean; message: string };
+export type PaymentsList = { ok: true; payments: OwedPayment[]; unreadable: number } | { ok: false; message: string };
+/** `warn`: it went through, but the admin should look at the account (marked by someone else while the grant ran). */
+export type PaymentDone = { ok: true; already: boolean; message: string; warn?: boolean };
 export type PaymentFailed = { ok: false; code: string; message: string };
 
 export const PAYMENTS_URL = "/api/admin/payments";
 const OFFLINE = "Could not reach Photo to PGN. Check the connection and try again.";
 const SIGN_IN = "Sign in again.";
+/** A grant whose request failed on the way: it may have reached the server, which may have added the credits. */
+const GRANT_NETWORK =
+  "The connection to Photo to PGN failed, so it is not known whether the grant reached it or whether the credits were added. Do not grant this payment again until you have refreshed the list, and check the account's balance before doing anything else.";
 
 async function call(url: string, method: "GET" | "POST", deps: PaymentsDeps): Promise<{ status: number; body: Record<string, unknown> } | PaymentFailed> {
   const token = await (deps.getToken ?? currentToken)();
@@ -61,7 +66,10 @@ function failure(status: number, body: Record<string, unknown>, what: string): P
 export async function listOwedPayments(deps: PaymentsDeps = {}): Promise<PaymentsList> {
   const r = await call(PAYMENTS_URL, "GET", deps);
   if ("ok" in r) return r;
-  if (r.status === 200 && Array.isArray(r.body.payments)) return { ok: true, payments: r.body.payments as OwedPayment[] };
+  if (r.status === 200 && Array.isArray(r.body.payments)) {
+    const unreadable = typeof r.body.unreadable === "number" && r.body.unreadable > 0 ? r.body.unreadable : 0;
+    return { ok: true, payments: r.body.payments as OwedPayment[], unreadable };
+  }
   return failure(r.status, r.body, "The payments did not load");
 }
 
@@ -70,14 +78,31 @@ const pathOf = (id: string, action: "grant" | "granted") => `${PAYMENTS_URL}/${e
 /** Add the pack's credits to the account the checkout named, then mark the payment granted (the server does both, in that order). */
 export async function grantPayment(id: string, deps: PaymentsDeps = {}): Promise<PaymentDone | PaymentFailed> {
   const r = await call(pathOf(id, "grant"), "POST", deps);
-  if ("ok" in r) return r;
+  if ("ok" in r) return r.code === "network" ? { ok: false, code: "grant_network", message: GRANT_NETWORK } : r;
   const b = r.body;
   if (r.status === 200 && b.already === true) return { ok: true, already: true, message: "That payment was already marked done; no credits were added." };
   if (r.status === 200 && typeof b.credits === "number") {
     const balance = typeof b.balance === "number" ? ` (balance now ${b.balance})` : "";
-    return { ok: true, already: false, message: `Added ${b.credits} credits to ${String(b.email ?? "the account")}${balance}, and marked the payment done.` };
+    const added = `Added ${b.credits} credits to ${String(b.email ?? "the account")}${balance}`;
+    if (b.markedMeanwhile === true) {
+      const when = typeof b.grantedAt === "string" ? shortWhen(b.grantedAt) : "";
+      return {
+        ok: true,
+        already: false,
+        warn: true,
+        message: `${added}, but someone else marked the payment done while the grant was running${when ? ` (${when})` : ""}. If they also added the credits by hand, the account has them twice: check its balance and take off any extra (Admin: add credits, with a negative number).`,
+      };
+    }
+    return { ok: true, already: false, message: `${added}, and marked the payment done.` };
   }
-  return failure(r.status, b, "The credits were not added");
+  const e = (b.error ?? {}) as { code?: unknown; message?: unknown };
+  if (typeof e.message === "string" && e.message) return { ok: false, code: typeof e.code === "string" ? e.code : "error", message: e.message };
+  // No word from photo2pgn's server (Netlify's own 502 or 504, or an odd answer): the grant may have run.
+  return {
+    ok: false,
+    code: "grant_unknown",
+    message: `Photo to PGN did not say whether the credits were added (HTTP ${r.status}). Do not grant this payment again until you have refreshed the list, and check the account's balance before doing anything else.`,
+  };
 }
 
 /** Mark a payment granted without adding credits here; a second mark changes nothing. */
@@ -101,7 +126,13 @@ export function packText(p: Pick<OwedPayment, "pack" | "credits">): string {
 
 /** What "Grant and mark done" can do for a payment: grant, or why only "Mark done" is offered. */
 export function grantable(p: OwedPayment): { ok: true } | { ok: false; why: string } {
-  if (p.grantStartedAt) return { ok: false, why: "A grant of this payment began and has not finished. Check the account's balance before adding credits by hand, then Mark done." };
+  if (p.grantStartedAt) {
+    const when = shortWhen(p.grantStartedAt);
+    return {
+      ok: false,
+      why: `A grant of this payment began${when ? ` (${when})` : ""} and did not confirm, so the credits may or may not have been added. Do not grant it again: check the account's balance, add the credits by hand only if they are missing, then Mark done.`,
+    };
+  }
   if (!p.pack || !p.credits) return { ok: false, why: "Not one of the packs: add any credits owed by hand above, then Mark done." };
   if (!p.email) return { ok: false, why: "The checkout did not carry the account's email: add the credits by hand above, then Mark done." };
   return { ok: true };

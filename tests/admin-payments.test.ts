@@ -147,14 +147,11 @@ describe("grant and mark done", () => {
     expect(grant.mock.calls[0][1]).toEqual({ email: "kai@example.com", credits: 20, note: "Paddle txn_20 (pack-20)" });
   });
 
-  it("leaves the payment open, and says why in plain words, when the grant fails", async () => {
+  it("gives the claim back, and says why in plain words, when credits-grant certainly wrote nothing", async () => {
     const cases: [GrantOutcome, number, string, RegExp][] = [
       [{ ok: false, code: "not_found", status: 404 }, 409, "no_account", /No HintWise account has the email kai@example.com/],
-      [{ ok: false, code: "unreachable", status: null }, 502, "grant_unreachable", /Could not reach HintWise/],
-      [{ ok: false, code: "failed", status: 500 }, 502, "grant_unclear", /did not confirm the grant \(HTTP 500\).*check the balance of kai@example\.com/],
-      [{ ok: false, code: "failed", status: 200 }, 502, "grant_unclear", /HTTP 200.*in case the credits went in/],
-      [{ ok: false, code: "failed", status: null }, 502, "grant_unclear", /did not confirm the grant\. /],
       [{ ok: false, code: "request", status: 400 }, 502, "grant_refused", /turned the grant down: it does not take kai@example\.com with 50 credits\. No credits were added.*Mark done/],
+      [{ ok: false, code: "refused", status: 404 }, 502, "grant_refused", /refused the grant \(HTTP 404\), so no credits were added.*Mark done/],
       [{ ok: false, code: "signed_out", status: 401 }, 401, "sign_in", /Sign in again/],
       [{ ok: false, code: "admin", status: 403 }, 403, "admin", /not an admin/],
     ];
@@ -168,21 +165,88 @@ describe("grant and mark done", () => {
       expect(r.body.error?.message).toMatch(/still open/);
       const p = await get("txn_1");
       expect(p?.grantedAt).toBeNull();
-      expect(p?.grantStartedAt).toBeNull(); // the claim is given back: it can be tried again
+      expect(p?.grantStartedAt).toBeNull(); // nothing was written: the claim is given back
       expect(ids((await call()).body)).toEqual(["txn_1"]);
       expect(grant).toHaveBeenCalledTimes(1);
     }
   });
 
-  it("can be tried again after a failed grant, and then grants once", async () => {
+  it("keeps the claim when it is not known whether the credits went in, and never offers the grant again", async () => {
+    const cases: [GrantOutcome, string, RegExp][] = [
+      [{ ok: false, code: "unreachable", status: null }, "grant_unreachable", /connection to HintWise failed while the grant was being sent, so the credits may or may not have been added/],
+      [{ ok: false, code: "failed", status: 500 }, "grant_unclear", /did not confirm the grant \(HTTP 500\), so the credits may or may not/],
+      [{ ok: false, code: "failed", status: 504 }, "grant_unclear", /HTTP 504/],
+      [{ ok: false, code: "failed", status: 200 }, "grant_unclear", /HTTP 200/],
+      [{ ok: false, code: "failed", status: null }, "grant_unclear", /did not confirm the grant, so/],
+    ];
+    for (const [outcome, code, message] of cases) {
+      let now = NOW;
+      const { call, put, get, grant } = setup({ grant: async () => outcome, now: () => now });
+      await put(payment("txn_1"));
+      const r = await call("/txn_1/grant", "POST");
+      expect(r.status).toBe(502);
+      expect(r.body.error?.code).toBe(code);
+      expect(r.body.error?.message).toMatch(message);
+      expect(r.body.error?.message).toMatch(/Do not grant this payment again\. After 28 Nov 2026, 18:02 UTC, check the balance of kai@example\.com.*add the 50 credits by hand.*only if they are missing, then Mark done/);
+      expect(await get("txn_1")).toMatchObject({ grantedAt: null, grantStartedAt: NOW.toISOString() }); // the claim stays
+      expect(ids((await call()).body)).toEqual(["txn_1"]);
+      expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("busy");
+      now = new Date(NOW.getTime() + GRANT_CLAIM_MS);
+      expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("unfinished");
+      expect(grant).toHaveBeenCalledTimes(1);
+      expect((await call("/txn_1/granted", "POST")).status).toBe(200); // Mark done is the way out, once the claim is old
+    }
+  });
+
+  it("can be tried again after credits-grant refused it, and then grants once", async () => {
     let fails = true;
-    const { call, put, get, grant } = setup({ grant: async (_t, g) => (fails ? { ok: false, code: "unreachable", status: null } : { ok: true, email: g.email, balance: 50 }) });
+    const { call, put, get, grant } = setup({ grant: async (_t, g) => (fails ? { ok: false, code: "signed_out", status: 401 } : { ok: true, email: g.email, balance: 50 }) });
     await put(payment("txn_1"));
-    expect((await call("/txn_1/grant", "POST")).status).toBe(502);
+    expect((await call("/txn_1/grant", "POST")).status).toBe(401);
     fails = false;
     expect((await call("/txn_1/grant", "POST")).status).toBe(200);
     expect(grant).toHaveBeenCalledTimes(2);
     expect((await get("txn_1"))?.grantedAt).toBe(NOW.toISOString());
+  });
+
+  describe("with the real credits-grant client, when the grant goes in but the answer is lost", () => {
+    /** A credits-grant that adds the credits and then fails to answer as told. */
+    function platform(after: () => Response) {
+      const balances = new Map<string, number>();
+      const fetch_ = vi.fn(async (_u: string, init?: RequestInit) => {
+        const g = JSON.parse(String(init!.body)) as { email: string; credits: number };
+        balances.set(g.email, (balances.get(g.email) ?? 0) + g.credits);
+        return after();
+      });
+      return { balances, fetch_, client: creditsGrantClient("https://auth.test/functions/v1/credits-grant", fetch_ as unknown as typeof fetch) };
+    }
+    const cases: [string, () => Response, string][] = [
+      [
+        "a connection dropped after sending",
+        () => {
+          throw new TypeError("fetch failed");
+        },
+        "grant_unreachable",
+      ],
+      ["a 504 after the commit", () => new Response("upstream timed out", { status: 504 }), "grant_unclear"],
+      ["a 500 database after the commit", () => new Response(JSON.stringify({ error: "database", message: "TypeError: fetch failed" }), { status: 500 }), "grant_unclear"],
+      ["a 546 from the function layer", () => new Response("", { status: 546 }), "grant_unclear"],
+      ["a 200 without a balance", () => new Response(JSON.stringify({ email: "kai@example.com" }), { status: 200 }), "grant_unclear"],
+    ];
+    for (const [name, after, code] of cases) {
+      it(`adds the credits once: ${name}`, async () => {
+        const { balances, fetch_, client } = platform(after);
+        let now = NOW;
+        const { call, put } = setup({ grant: client, now: () => now });
+        await put(payment("txn_1"));
+        expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe(code);
+        expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("busy");
+        now = new Date(NOW.getTime() + 10 * GRANT_CLAIM_MS);
+        expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("unfinished");
+        expect(fetch_).toHaveBeenCalledTimes(1);
+        expect(balances.get("kai@example.com")).toBe(50);
+      });
+    }
   });
 
   it("does not grant again once the payment is marked", async () => {
@@ -257,20 +321,26 @@ describe("grant and mark done", () => {
         return kv.setJSON(k, v, c);
       },
     };
-    const { call, put, get, grant } = setup({ payments: failing });
+    let now = NOW;
+    const { call, put, get, grant } = setup({ payments: failing, now: () => now });
     await put(payment("txn_1"));
     const r = await call("/txn_1/grant", "POST");
     expect(r.status).toBe(500);
-    expect(r.body).toMatchObject({ error: { code: "not_marked", message: expect.stringMatching(/were added to kai@example.com \(balance now 62\).*do not grant it again/) }, credits: 50 });
+    expect(r.body).toMatchObject({
+      error: { code: "not_marked", message: expect.stringMatching(/were added to kai@example.com \(balance now 62\).*Do not grant it again; press Mark done after 28 Nov 2026, 18:02 UTC/) },
+      credits: 50,
+    });
     expect(ids((await call()).body)).toEqual(["txn_1"]); // visible, not lost
     expect((await get("txn_1"))?.grantStartedAt).toBe(NOW.toISOString()); // the claim stays: no second grant from here
     expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("busy");
     expect(grant).toHaveBeenCalledTimes(1);
+    expect((await call("/txn_1/granted", "POST")).body.error?.code).toBe("grant_running"); // the claim is still young
+    now = new Date(NOW.getTime() + GRANT_CLAIM_MS);
     expect((await call("/txn_1/granted", "POST")).status).toBe(503); // the store still fails
     quiet.mockRestore();
   });
 
-  it("keeps the claim when giving it back fails after a failed grant", async () => {
+  it("keeps the claim when giving it back fails after a refused grant", async () => {
     const kv = memoryKV();
     const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let writes = 0;
@@ -281,12 +351,194 @@ describe("grant and mark done", () => {
         return kv.setJSON(k, v, c);
       },
     };
-    const { call, put, get } = setup({ payments: flaky, grant: async () => ({ ok: false, code: "failed", status: 500 }) });
+    const { call, put, get } = setup({ payments: flaky, grant: async () => ({ ok: false, code: "request", status: 400 }) });
     await put(payment("txn_1"));
-    expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("grant_unclear");
+    expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("grant_refused");
     expect((await get("txn_1"))?.grantStartedAt).toBe(NOW.toISOString());
     expect(quiet).toHaveBeenCalled();
     quiet.mockRestore();
+  });
+});
+
+describe("a store that gives no etag", () => {
+  /** A store whose reads carry no etag: a conditional write cannot be formed against it. */
+  const noEtags = () => {
+    const kv = memoryKV();
+    const writes: { onlyIfMatch?: string; onlyIfNew?: boolean }[] = [];
+    const store: KV = {
+      ...kv,
+      getJSON: async <T,>(k: string) => {
+        const r = await kv.getJSON<T>(k);
+        return r ? { value: r.value, etag: "" } : null;
+      },
+      setJSON: async (k, v, c) => {
+        writes.push(c ?? {});
+        return kv.setJSON(k, v, c);
+      },
+    };
+    return { store, writes };
+  };
+
+  it("refuses to grant, writes nothing, and leaves Mark done", async () => {
+    const { store, writes } = noEtags();
+    const { call, put, get, grant } = setup({ payments: store });
+    await put(payment("txn_1"));
+    writes.length = 0;
+    const r = await call("/txn_1/grant", "POST");
+    expect(r.status).toBe(503);
+    expect(r.body.error).toMatchObject({ code: "unguarded", message: expect.stringMatching(/no version.*could not be kept from running twice\. No credits were added\..*by hand.*Mark done/) });
+    expect(grant).not.toHaveBeenCalled();
+    expect(writes).toEqual([]); // no claim, not even an unconditional one
+    expect(await get("txn_1")).toMatchObject({ grantedAt: null });
+    expect((await get("txn_1"))?.grantStartedAt).toBeUndefined();
+    expect((await call("/txn_1/granted", "POST")).status).toBe(200); // Mark done still works
+    expect((await get("txn_1"))?.grantedAt).toBe(NOW.toISOString());
+  });
+
+  it("lets neither of two grants that arrive together through", async () => {
+    const { store } = noEtags();
+    const { call, put, grant } = setup({ payments: store });
+    await put(payment("txn_1"));
+    const [a, b] = await Promise.all([call("/txn_1/grant", "POST"), call("/txn_1/grant", "POST")]);
+    expect([a.status, b.status]).toEqual([503, 503]);
+    expect([a.body.error?.code, b.body.error?.code]).toEqual(["unguarded", "unguarded"]);
+    expect(grant).not.toHaveBeenCalled();
+  });
+});
+
+describe("a store that fails", () => {
+  const quietly = async (f: () => Promise<void>) => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await f();
+    } finally {
+      quiet.mockRestore();
+    }
+  };
+
+  it("answers the list in JSON with what it could read, and how many it could not", async () => {
+    await quietly(async () => {
+      const kv = memoryKV();
+      const bad = new Set(["payment/txn_bad1", "payment/txn_bad2"]);
+      const store: KV = {
+        ...kv,
+        getJSON: async <T,>(k: string) => {
+          if (bad.has(k)) throw new SyntaxError("Unexpected token");
+          return kv.getJSON<T>(k);
+        },
+      };
+      const { call, put, payments } = setup({ payments: store });
+      for (let i = 0; i < 12; i++) await put(payment(`txn_${String(i).padStart(2, "0")}`, { completedAt: `2026-11-${String(10 + i)}T10:00:00.000Z` }));
+      await put(payment("txn_bad1"));
+      await put(payment("txn_bad2"));
+      await payments.setJSON("payment/txn_odd", { hello: "world" }); // not a payment
+      await put(payment("txn_done", { grantedAt: "2026-11-21T10:00:00.000Z" }));
+      const r = await call();
+      expect(r.status).toBe(200);
+      expect(r.body.unreadable).toBe(3);
+      expect(ids(r.body)).toEqual(Array.from({ length: 12 }, (_, i) => `txn_${String(11 - i).padStart(2, "0")}`));
+    });
+  });
+
+  it("leaves out a record removed between the listing and the read", async () => {
+    const kv = memoryKV();
+    const store: KV = { ...kv, list: async (p) => [...(await kv.list(p)), "payment/txn_gone"] };
+    const { call, put } = setup({ payments: store });
+    await put(payment("txn_1"));
+    expect((await call()).body).toEqual({ payments: [expect.objectContaining({ transactionId: "txn_1" })] });
+  });
+
+  it("answers 503 in JSON when the payments cannot be listed", async () => {
+    await quietly(async () => {
+      const kv = memoryKV();
+      const { call } = setup({
+        payments: {
+          ...kv,
+          list: async () => {
+            throw new Error("blobs down");
+          },
+        },
+      });
+      const r = await call();
+      expect(r.status).toBe(503);
+      expect(r.body.error).toMatchObject({ code: "store", message: expect.stringMatching(/could not be read from the store/) });
+    });
+  });
+
+  it("answers 503 in JSON, and grants or marks nothing, when a payment cannot be read", async () => {
+    const kv = memoryKV();
+    const store: KV = {
+      ...kv,
+      getJSON: async () => {
+        throw new Error("blobs down");
+      },
+    };
+    const { call, grant } = setup({ payments: store });
+    for (const action of ["grant", "granted"]) {
+      const r = await call(`/txn_1/${action}`, "POST");
+      expect(r.status).toBe(503);
+      expect(r.body.error).toMatchObject({ code: "store", message: expect.stringMatching(/nothing was granted or marked/) });
+    }
+    expect(grant).not.toHaveBeenCalled();
+  });
+
+  it("does not grant when the claim cannot be written", async () => {
+    const kv = memoryKV();
+    const store: KV = {
+      ...kv,
+      setJSON: async (k, v, c) => {
+        if (c?.onlyIfMatch) throw new Error("blobs down");
+        return kv.setJSON(k, v, c);
+      },
+    };
+    const { call, put, grant } = setup({ payments: store });
+    await put(payment("txn_1"));
+    const r = await call("/txn_1/grant", "POST");
+    expect(r.status).toBe(503);
+    expect(r.body.error).toMatchObject({ code: "store", message: expect.stringMatching(/no credits were added\. Refresh the list/) });
+    expect(grant).not.toHaveBeenCalled();
+  });
+});
+
+describe("mark done while a grant runs", () => {
+  it("refuses Mark done while a grant claim is young, and marks once it is old", async () => {
+    let now = NOW;
+    const { call, put, get } = setup({ now: () => now });
+    await put(payment("txn_1", { grantStartedAt: new Date(NOW.getTime() - 30_000).toISOString() }));
+    const r = await call("/txn_1/granted", "POST");
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatchObject({ code: "grant_running", message: expect.stringMatching(/started at 28 Nov 2026, 17:59 UTC and may still be running.*before 28 Nov 2026, 18:01 UTC.*check the account's balance/) });
+    expect((await get("txn_1"))?.grantedAt).toBeNull();
+    now = new Date(NOW.getTime() + 90_000);
+    expect((await call("/txn_1/granted", "POST")).status).toBe(200);
+  });
+
+  it("refuses Mark done from the panel while another admin's grant is under way, and the grant then marks as usual", async () => {
+    let release: (v: GrantOutcome) => void = () => undefined;
+    const { call, put, get, grant } = setup({ grant: () => new Promise<GrantOutcome>((r) => (release = r)) });
+    await put(payment("txn_1"));
+    const granting = call("/txn_1/grant", "POST");
+    await vi.waitFor(() => expect(grant).toHaveBeenCalledTimes(1));
+    expect((await call("/txn_1/granted", "POST")).body.error?.code).toBe("grant_running");
+    release({ ok: true, email: "kai@example.com", balance: 50 });
+    expect(await granting).toEqual({ status: 200, body: { email: "kai@example.com", balance: 50, credits: 50, grantedAt: NOW.toISOString(), already: false } });
+    expect(await get("txn_1")).toMatchObject({ grantedAt: NOW.toISOString(), grantedCredits: 50 });
+  });
+
+  it("says so when the payment was marked by someone else while the grant ran (the owner's worker route still marks)", async () => {
+    let release: (v: GrantOutcome) => void = () => undefined;
+    const { call, put, get, grant, deps } = setup({ grant: () => new Promise<GrantOutcome>((r) => (release = r)) });
+    await put(payment("txn_1"));
+    const granting = call("/txn_1/grant", "POST");
+    await vi.waitFor(() => expect(grant).toHaveBeenCalledTimes(1));
+    const worker = { config: { webhookSecret: null, prices: {} }, payments: deps.payments, now: () => new Date(NOW.getTime() + 5_000) };
+    expect(await (await handlePaymentGranted(true, "txn_1", worker)).json()).toEqual({ grantedAt: new Date(NOW.getTime() + 5_000).toISOString() });
+    release({ ok: true, email: "kai@example.com", balance: 100 });
+    expect(await granting).toEqual({
+      status: 200,
+      body: { email: "kai@example.com", balance: 100, credits: 50, grantedAt: new Date(NOW.getTime() + 5_000).toISOString(), already: false, markedMeanwhile: true },
+    });
+    expect((await get("txn_1"))?.grantedAt).toBe(new Date(NOW.getTime() + 5_000).toISOString());
   });
 });
 
@@ -392,12 +644,21 @@ describe("the credits-grant client", () => {
   it("names each refusal", async () => {
     const cases: [number, unknown, string][] = [
       [401, { error: "auth" }, "signed_out"],
+      [401, "", "signed_out"], // Supabase's own layer, before the function
       [403, { error: "admin" }, "admin"],
+      [403, "forbidden", "refused"],
       [404, { error: "not_found" }, "not_found"],
+      [404, { code: "NOT_FOUND", message: "Requested function was not found" }, "refused"],
       [400, { error: "request" }, "request"],
-      [500, { error: "database" }, "failed"],
+      [400, { error: "below_zero" }, "request"],
+      [500, { error: "database" }, "failed"], // also what a lost answer from a committed call looks like
+      [500, { error: "admin" }, "failed"],
       [502, "bad gateway", "failed"],
+      [504, "", "failed"],
+      [413, { error: "request" }, "failed"],
+      [429, {}, "failed"],
       [200, { nonsense: true }, "failed"],
+      [200, "not json", "failed"],
     ];
     for (const [status, body, code] of cases) expect(await grantWith(answer(status, body))).toEqual({ ok: false, code, status });
     const offline = vi.fn(async () => {
