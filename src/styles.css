@@ -7,6 +7,8 @@
   --brand: #1f3a5f;
   --brand-ink: #ffffff;
   --accent: #2f6db5;
+  /* Text on an accent fill: the viewer's selected move, a hovered step button. */
+  --on-accent: #ffffff;
   --focus: #2f6db5;
   --ok: transparent;
   --unsure-bg: #e6effa;
@@ -37,6 +39,7 @@
     --line: #333a44;
     --brand: #3d6ea8;
     --accent: #7fb0ec;
+    --on-accent: #14171c;
     --focus: #7fb0ec;
     --unsure-bg: #1d2c40;
     --unsure-line: #6d9fdc;
@@ -59,6 +62,7 @@
     --line: #333a44;
     --brand: #3d6ea8;
     --accent: #7fb0ec;
+    --on-accent: #14171c;
     --focus: #7fb0ec;
     --unsure-bg: #1d2c40;
     --unsure-line: #6d9fdc;
@@ -1349,13 +1353,13 @@ a.button {
 
 .gv-moves .cell.selected {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   box-shadow: none;
-  text-decoration-color: #fff;
+  text-decoration-color: var(--on-accent);
 }
 
 .gv-moves .cell.selected .ins {
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .gv-controls {
@@ -1384,7 +1388,7 @@ a.button {
 
 .gv-btn:hover:not(:disabled) {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .gv-btn:disabled {
@@ -1720,5 +1724,12 @@ button.big {
   /* Paper drops the fill unless told: a filled button's label takes the ink. */
   button:not(.secondary):not(.link) {
     color: var(--text);
+  }
+
+  /* The selected move is white on the accent on screen; on paper, the ink. */
+  .gv-moves .cell.selected,
+  .gv-moves .cell.selected .ins {
+    color: var(--text);
+    text-decoration-color: var(--text);
   }
 }

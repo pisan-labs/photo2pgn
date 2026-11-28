@@ -115,6 +115,28 @@ describe("print in the app", () => {
   });
 });
 
+describe("the game viewer's text on the accent (review R1-2)", () => {
+  const light = tokens(css.match(/:root\s*\{([^}]*)\}/)![1]);
+  const dark = { ...light, ...tokens(css.match(SCREEN_ATTR)![1]) };
+  const SELECTED = [".gv-moves .cell.selected", ".gv-moves .cell.selected .ins", ".gv-btn:hover:not(:disabled)"];
+
+  it("is --on-accent, at 4.5:1 on the accent in both modes (white on the dark accent was 2.25:1)", () => {
+    expect(light["--on-accent"]).toBe("#ffffff");
+    expect(dark["--on-accent"]).toBe("#14171c");
+    for (const t of [light, dark]) expect(ratio(rgb(t["--on-accent"]), rgb(t["--accent"]))).toBeGreaterThanOrEqual(4.5);
+    for (const selector of SELECTED) {
+      const own = rules(css.replace(PRINT, ""), selector);
+      expect(own, selector).toMatch(/(?:^|;)\s*color:\s*var\(--on-accent\)/);
+      expect(own, selector).not.toMatch(/#fff\b/i);
+    }
+  });
+
+  it("prints the selected move in the ink: paper drops the accent, and white on white was 1:1", () => {
+    const print = [...css.matchAll(PRINT)][0][1];
+    for (const selector of SELECTED.slice(0, 2)) expect(rules(print, selector), selector).toMatch(/(?:^|;)\s*color:\s*var\(--text\)/);
+  });
+});
+
 describe("the switch", () => {
   beforeAll(async () => {
     await import("../src/lib/hw-theme.js");
