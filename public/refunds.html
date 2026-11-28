@@ -3,14 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Light and dark mode: sets data-theme on <html> before the first paint (claude-built-apps platform/src/theme/theme-init.js, unchanged; tests/theme.test.ts pins it) -->
+    <script>(function(){var t;try{t=localStorage.getItem('hw-theme')}catch{}if(t!=='light'&&t!=='dark')t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t)})();</script>
     <meta name="description" content="Refunds for Photo to PGN credits." />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231f3a5f'/%3E%3Cg fill='none' stroke='%23e9c99b' stroke-width='5.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 32V20a4 4 0 0 1 4-4h12'/%3E%3Cpath d='M68 16h12a4 4 0 0 1 4 4v12'/%3E%3Cpath d='M84 68v12a4 4 0 0 1-4 4H68'/%3E%3Cpath d='M32 84H20a4 4 0 0 1-4-4V68'/%3E%3C/g%3E%3Cg transform='translate%2850 50%29 scale%280.9%29 translate%28-50 -52%29'%3E%3Cpath fill='%23ffffff' d='M65 72C68 58 67 40 56 30L55 21 48 27.5C40 28.5 34 34.5 31 42.5L27.5 50C26.5 53 28.5 56 31.5 55L41.5 51C43.5 51 44.5 53 42.5 56 39.5 61 37.5 66 37.5 72Z'/%3E%3Cg fill='none' stroke='%231f3a5f' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M59.5 37.5l4-2.5'/%3E%3Cpath d='M62 46l4.5-1.5'/%3E%3Cpath d='M63 55h4.5'/%3E%3C/g%3E%3Crect x='33.5' y='72' width='34' height='5' rx='1.5' fill='%23ffffff'/%3E%3Crect x='30.5' y='78' width='40' height='5.5' rx='2' fill='%23ffffff'/%3E%3Ccircle cx='44.5' cy='37' r='2.6' fill='%231f3a5f'/%3E%3C/g%3E%3C/svg%3E" />
     <title>Refund policy · Photo to PGN</title>
     <script defer src="/hw-events.js" data-app="photo2pgn"></script>
+    <script defer src="/hw-theme.js"></script>
     <style>
-      :root { --bg: #f6f5f1; --panel: #fff; --text: #1d232b; --muted: #5b6470; --line: #dcd9d0; --accent: #2f6db5; }
-      @media (prefers-color-scheme: dark) {
-        :root { --bg: #14171c; --panel: #1c2128; --text: #e7e9ec; --muted: #a0a8b3; --line: #333a44; --accent: #7fb0ec; }
+      :root { color-scheme: light; --bg: #f6f5f1; --panel: #fff; --text: #1d232b; --muted: #5b6470; --line: #dcd9d0; --accent: #2f6db5; }
+      /* The dark set twice and the same, for screens only: the switch's choice, and the device's setting until there is one. */
+      @media screen {
+        :root[data-theme="dark"] { color-scheme: dark; --bg: #14171c; --panel: #1c2128; --text: #e7e9ec; --muted: #a0a8b3; --line: #333a44; --accent: #7fb0ec; }
+      }
+      @media screen and (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) { color-scheme: dark; --bg: #14171c; --panel: #1c2128; --text: #e7e9ec; --muted: #a0a8b3; --line: #333a44; --accent: #7fb0ec; }
       }
       * { box-sizing: border-box; }
       body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -25,11 +32,17 @@
       table { border-collapse: collapse; margin: 8px 0; }
       th, td { text-align: left; padding: 6px 16px 6px 0; border-bottom: 1px solid var(--line); }
       .others { color: var(--muted); font-size: 0.9rem; margin-top: 32px; }
+      .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      hw-theme-toggle:not([hidden]) { display: inline-flex; flex: none; width: var(--hw-theme-toggle-size, 44px); height: var(--hw-theme-toggle-size, 44px); }
+      @media print { hw-theme-toggle { display: none !important; } }
     </style>
   </head>
   <body>
     <main>
-      <a class="back" href="/">← Photo to PGN</a>
+      <header class="page-head">
+        <a class="back" href="/">← Photo to PGN</a>
+        <hw-theme-toggle></hw-theme-toggle>
+      </header>
       <h1>Refund policy</h1>
       <p class="updated">Last updated: 13 November 2026</p>
 
