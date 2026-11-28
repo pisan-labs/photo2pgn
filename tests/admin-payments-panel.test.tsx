@@ -195,6 +195,21 @@ describe("Grant and mark done", () => {
     expect(host!.querySelector(".payments-notice")?.textContent).toBe("Marked the payment done.");
   });
 
+  it("offers only Mark done after HintWise turns the grant down, until the list is refreshed", async () => {
+    const why = "HintWise turned the grant down: it does not take kai@example.com with 50 credits. No credits were added. The payment is still open. Add them by hand (Admin: add credits), then Mark done.";
+    const { deps } = server(
+      [{ status: 200, body: { payments: [owed("txn_1")] } }, { status: 200, body: { payments: [owed("txn_1")] } }],
+      { "/api/admin/payments/txn_1/grant": [{ status: 502, body: { error: { code: "grant_refused", message: why } } }] },
+    );
+    await render(deps);
+    await click(button("Grant and mark done"));
+    expect(rows()[0].querySelector('[role="alert"]')?.textContent).toBe(why);
+    expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Mark done"]);
+    await click(button("Refresh"));
+    expect(rows()[0].querySelector('[role="alert"]')).toBeNull();
+    expect(buttons(rows()[0]).map((x) => x.textContent)).toEqual(["Grant and mark done", "Mark done"]);
+  });
+
   it("does nothing on a second click while the first is under way", async () => {
     let answer: (v: { status: number; body: unknown }) => void = () => undefined;
     const { deps, calls } = server({ status: 200, body: { payments: [owed("txn_1")] } }, { "/api/admin/payments/txn_1/grant": [new Promise((r) => (answer = r))] });

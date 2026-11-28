@@ -12,7 +12,7 @@ type ListState = { kind: "loading" } | { kind: "error"; message: string } | { ki
 const withoutKey = (e: Record<string, string>, id: string) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== id));
 
 /** The server's answers after which only "Mark done" is offered: the credits may already be in, or there is nothing to grant from here. */
-const MARK_ONLY = new Set(["not_marked", "unfinished", "no_pack", "no_email"]);
+const MARK_ONLY = new Set(["not_marked", "unfinished", "no_pack", "no_email", "grant_refused"]);
 
 export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGranted?: () => void }) {
   const [list, setList] = useState<ListState>({ kind: "loading" });
@@ -50,6 +50,7 @@ export function AdminPayments({ deps, onGranted }: { deps?: PaymentsDeps; onGran
     setList({ kind: "loading" });
     setNotice("");
     setRowErrors({});
+    setMarkOnly([]); // the fresh list says again what each payment allows
     setConfirming(null);
     setReloads((n) => n + 1);
   };

@@ -15,10 +15,9 @@
 // credits twice; a claim that never finished (the function was stopped)
 // is shown, and only "Mark done" is offered for it.
 import type { KV } from "./kv";
+import { APP } from "./gateway";
 import { openPayments, type Payment } from "./paddle";
 import { isAllowance } from "../../src/lib/balance";
-
-export const APP = "photo2pgn";
 
 /** What the gateway says about the caller: an admin, signed in but not an admin, signed out, or it could not be asked. */
 export type AdminStatus = "admin" | "not_admin" | "signed_out" | "unreachable";
@@ -154,8 +153,19 @@ function grantFailure(r: Extract<GrantOutcome, { ok: false }>, p: Payment): Resp
       );
     case "unreachable":
       return fail(502, "grant_unreachable", `Could not reach HintWise to add the credits. ${still} Try again in a minute.`);
+    case "request":
+      return fail(
+        502,
+        "grant_refused",
+        `HintWise turned the grant down: it does not take ${p.email} with ${p.credits} credits. No credits were added. ${still} Add them by hand (Admin: add credits), then Mark done.`,
+      );
     default:
-      return fail(502, "grant_failed", `HintWise did not add the credits${r.status ? ` (HTTP ${r.status})` : ""}. ${still} Try again in a minute.`);
+      // A server error or an answer without a balance: the grant may have gone in before the answer was lost.
+      return fail(
+        502,
+        "grant_unclear",
+        `HintWise did not confirm the grant${r.status ? ` (HTTP ${r.status})` : ""}. ${still} Before you try again, check the balance of ${p.email} (Check balance), in case the credits went in.`,
+      );
   }
 }
 

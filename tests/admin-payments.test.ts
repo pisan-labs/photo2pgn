@@ -151,9 +151,10 @@ describe("grant and mark done", () => {
     const cases: [GrantOutcome, number, string, RegExp][] = [
       [{ ok: false, code: "not_found", status: 404 }, 409, "no_account", /No HintWise account has the email kai@example.com/],
       [{ ok: false, code: "unreachable", status: null }, 502, "grant_unreachable", /Could not reach HintWise/],
-      [{ ok: false, code: "failed", status: 500 }, 502, "grant_failed", /HTTP 500/],
-      [{ ok: false, code: "failed", status: null }, 502, "grant_failed", /did not add the credits\. /],
-      [{ ok: false, code: "request", status: 400 }, 502, "grant_failed", /HTTP 400/],
+      [{ ok: false, code: "failed", status: 500 }, 502, "grant_unclear", /did not confirm the grant \(HTTP 500\).*check the balance of kai@example\.com/],
+      [{ ok: false, code: "failed", status: 200 }, 502, "grant_unclear", /HTTP 200.*in case the credits went in/],
+      [{ ok: false, code: "failed", status: null }, 502, "grant_unclear", /did not confirm the grant\. /],
+      [{ ok: false, code: "request", status: 400 }, 502, "grant_refused", /turned the grant down: it does not take kai@example\.com with 50 credits\. No credits were added.*Mark done/],
       [{ ok: false, code: "signed_out", status: 401 }, 401, "sign_in", /Sign in again/],
       [{ ok: false, code: "admin", status: 403 }, 403, "admin", /not an admin/],
     ];
@@ -282,7 +283,7 @@ describe("grant and mark done", () => {
     };
     const { call, put, get } = setup({ payments: flaky, grant: async () => ({ ok: false, code: "failed", status: 500 }) });
     await put(payment("txn_1"));
-    expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("grant_failed");
+    expect((await call("/txn_1/grant", "POST")).body.error?.code).toBe("grant_unclear");
     expect((await get("txn_1"))?.grantStartedAt).toBe(NOW.toISOString());
     expect(quiet).toHaveBeenCalled();
     quiet.mockRestore();
