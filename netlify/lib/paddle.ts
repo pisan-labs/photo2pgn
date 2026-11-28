@@ -108,6 +108,9 @@ export interface WebhookDeps extends PaddleDeps {
   allowedIps: () => Promise<string[] | null>;
 }
 
+/** The `custom_data.app` photo2pgn's own checkout gives its sales (src/lib/checkout.ts). */
+const OWN_APP = "photo2pgn";
+
 const reply = (status: number, body: object) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -144,10 +147,16 @@ export async function handlePaddleWebhook(req: Request, deps: WebhookDeps): Prom
   if (event.event_type !== "transaction.completed" || !event.data || !id) return reply(200, { ignored: true });
 
   const d = event.data;
-  const priceIds = (d.items ?? []).map((i) => i.price?.id).filter((x): x is string => Boolean(x));
-  const pack = CREDIT_PACKS.find((p) => priceIds.includes(config.prices[p.id] ?? "\0")) ?? null;
   const cd = d.custom_data ?? {};
   const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  // The Paddle account also sells mychessmaster.net memberships (28 Nov), and Paddle sends
+  // every destination every event. A sale another app's checkout tagged is answered 200, so
+  // Paddle stops retrying, and nothing of it is kept or echoed. An untagged sale is kept.
+  const app = str(cd.app);
+  if (app && app !== OWN_APP) return reply(200, { ignored: true, reason: "other app" });
+
+  const priceIds = (d.items ?? []).map((i) => i.price?.id).filter((x): x is string => Boolean(x));
+  const pack = CREDIT_PACKS.find((p) => priceIds.includes(config.prices[p.id] ?? "\0")) ?? null;
   const payment: Payment = {
     transactionId: id,
     customerId: d.customer_id ?? null,

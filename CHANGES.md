@@ -145,3 +145,5 @@
 2026-11-26 [note] Correction to the 2026-11-23 line: the branch merged as PR #7 was analytics-merge (71dc723), not analytics-on-main
 
 2026-11-26 [doc] privacy.html, review r1: the salt changes each UTC day, serves every HintWise app, goes at a later UTC day's first visit; redaction only as far as the script can tell; the export's demo flag named
+
+2026-11-28 [code] Paddle webhook (owner, 28 Nov: "chess fix now"): the Paddle account also sells mychessmaster.net memberships and Paddle sends every destination every event, so a transaction.completed whose custom_data.app is a non-empty string other than "photo2pgn" is answered 200 {ignored, reason: "other app"} and not recorded; untagged sales and photo2pgn's are recorded as before; records already stored are left as they are
